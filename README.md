@@ -1,0 +1,3 @@
+P.S.E.U.D.O. optimizes the macOS Platform SSO registration experience.
+
+Comming soon...
