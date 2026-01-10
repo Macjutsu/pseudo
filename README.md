@@ -14,19 +14,19 @@ P.S.E.U.D.O. (or just `pseudo`) is an open source script that provides administr
 
 __Automatically opening and focusing the user to enable Touch ID.__
 
-![Start to enable Touch ID via `pseudo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/Touch-ID-Start.png)
+![Start to enable Touch ID via `pseudo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/Touch-ID-Start.jpg)
 
 __The user has enabled Touch ID__
 
-![Touch ID enabled via `psuedo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/Touch-ID-End.png)
+![Touch ID enabled via `psuedo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/Touch-ID-End.jpg)
 
 __Automatically opening and focusing the user to register Platform SSO.__
 
-![Start to register Platform SSO via `pseudo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/PSSO-Start.png)
+![Start to register Platform SSO via `pseudo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/PSSO-Start.jpg)
 
 __The user has registered Platform SSO__
 
-![Platform SSO registered via `psuedo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/PSSO-End.png)
+![Platform SSO registered via `psuedo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/PSSO-End.jpg)
 
 ## Learn More
 
