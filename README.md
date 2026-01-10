@@ -8,7 +8,7 @@ by Kevin M. White
 
 ## Introduction
 
-P.S.E.U.D.O. (or just `pseudo`) is an open source script that provides administrators with a solution to enforce Platform SSO registration and/or Touch ID enablement. Deployed using a single script and a required [PPPC configuration profile](https://support.apple.com/guide/deployment/privacy-preferences-policy-control-payload-dep38df53c2a/web), `pseudo` leverages [swiftDialog](https://github.com/swiftDialog/swiftDialog) and the macOS System Event, System Event UI, and Accessibility frameworks to ensure that uers are registering with Platform SSO and/or enabling Touch ID.
+P.S.E.U.D.O. (or just `pseudo`) is an open source script that provides administrators with a solution to enforce Platform SSO registration and/or Touch ID enablement. Deployed using a single script and a required [PPPC configuration profile](https://support.apple.com/guide/deployment/privacy-preferences-policy-control-payload-dep38df53c2a/web), `pseudo` leverages [swiftDialog](https://github.com/swiftDialog/swiftDialog) and the macOS System Event, System Event UI, and Accessibility frameworks to ensure that users are registering with Platform SSO and/or enabling Touch ID.
 
 ## Learn More
 
