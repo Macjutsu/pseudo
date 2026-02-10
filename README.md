@@ -19,6 +19,7 @@ More P.S.E.U.D.O. documentation is coming soon...
 ## Screenshots
 
 __Automatically opening and focusing the user to enable Touch ID.__
+Set `TOUCH_ID_OPTIONAL` to True to make this optional.
 
 ![Start to enable Touch ID via `pseudo`](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Screen-Captures/Touch-ID-Start.jpg)
 
