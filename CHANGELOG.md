@@ -32,5 +32,5 @@
 ### Specific Changes (1.0.0-beta1)
 
 - Initial public release.
-- A special thanks goes out to others who directly assisted and/or inspired me to create `pseudo`; @PicoMitchell, @ScottEKendall, and Adam N. on MacAdmins Slack.
+- A special thanks goes out to others who directly assisted and/or inspired me to create `pseudo`; @PicoMitchell, @ScottEKendall, and @anewhouse.
 - `pseudo` [1.0.0-beta1 SHA-256: 73f5b1d9f33008f89d79efcc984fd15bd7675697e711cdc44876d563f39bc526](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta1/pseudo.checksum.txt)

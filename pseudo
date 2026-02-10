@@ -32,6 +32,10 @@ set_defaults() {
 	DISPLAY_DIALOG_POSITION="topright"
 	readonly DISPLAY_DIALOG_POSITION
 	
+	# Make Touch ID setup optional for users. Set to "TRUE" to allow users to skip Touch ID setup, or "FALSE" to require it.
+	TOUCH_ID_OPTIONAL="TRUE"
+	readonly TOUCH_ID_OPTIONAL
+	
 	# Path to the log for the main pseudo workflow:
 	PSEUDO_LOG="/var/log/pseudo.log"
 	readonly PSEUDO_LOG
@@ -67,6 +71,18 @@ set_defaults() {
 	# Path to the Jamf Pro binary:
 	JAMF_PRO_BINARY="/usr/local/bin/jamf"
 	readonly JAMF_PRO_BINARY
+
+	# Path to the Workspace ONE Intelligent Hub CLI binary:
+	WORKSPACE_ONE_BINARY="/usr/local/bin/hubcli"
+	readonly WORKSPACE_ONE_BINARY
+	
+	# Update Workspace ONE sensor(s) after Platform SSO enrollment. Set to "TRUE" to update sensors, or "FALSE" to skip.
+	WORKSPACE_ONE_SENSORS_ENABLED="TRUE"
+	readonly WORKSPACE_ONE_SENSORS_ENABLED
+	
+	# Space-separated list of Workspace ONE sensor names to trigger after Platform SSO enrollment.
+	WORKSPACE_ONE_SENSORS="touchid_status platformsso_status"
+	readonly WORKSPACE_ONE_SENSORS
 }
 
 # Append input to the command line and log located at ${PSEUDO_LOG}.
@@ -235,6 +251,74 @@ jamf_pro_update_inventory() {
 	fi
 }
 
+# Open a dialog to inform the user about Workspace ONE registration.
+open_dialog_workspace_one_sync() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
+	sleep 0.1
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Device Registration" \
+	--message "A Workspace ONE Intelligent Hub window will now appear.  \n  \nPlease select your account from the list and click \"Continue\"." \
+	--icon "${psso_dialog_icon}" \
+	--style mini \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text "OK" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop
+	sleep 0.1
+}
+
+# Update Workspace ONE Intelligent Hub inventory if workflow was successful.
+workspace_one_update_inventory() {
+	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
+		log_pseudo "Status: Syncing device inventory with Workspace ONE Intelligent Hub..."
+		open_dialog_workspace_one_sync
+		local hubcli_response
+		hubcli_response=$("${WORKSPACE_ONE_BINARY}" sync 2>&1)
+		if [[ $(echo "${hubcli_response}" | grep -c 'Sync started.') -gt 0 ]]; then
+			log_pseudo "Status: Workspace ONE inventory sync successfully started."
+		else
+			log_pseudo "Warning: Could not start Workspace ONE inventory sync:\n${hubcli_response}"
+		fi
+		
+		# Update sensors if enabled
+		if [[ "${WORKSPACE_ONE_SENSORS_ENABLED}" == "TRUE" ]] && [[ -n "${WORKSPACE_ONE_SENSORS}" ]]; then
+			workspace_one_update_sensors
+		fi
+	fi
+}
+
+# Update Workspace ONE sensors after Platform SSO enrollment.
+workspace_one_update_sensors() {
+	log_pseudo "Status: Updating Workspace ONE sensors..."
+	
+	# Convert space-separated string to array
+	IFS=' ' read -ra sensor_array <<< "${WORKSPACE_ONE_SENSORS}"
+	
+	for sensor_name in "${sensor_array[@]}"; do
+		[[ -z "${sensor_name}" ]] && continue  # Skip empty entries
+		
+		log_pseudo "Status: Triggering Workspace ONE sensor: ${sensor_name}"
+		local sensor_response
+		local sensor_timer=0
+		local sensor_success="FALSE"
+		
+		# Trigger the sensor
+		sensor_response=$("${WORKSPACE_ONE_BINARY}" sensors --trigger "${sensor_name}" 2>&1)
+		
+		# Check for success message
+		if [[ $(echo "${sensor_response}" | grep -c 'Successfully executed the Sensor and reported the result to UEM.') -gt 0 ]]; then
+			sensor_success="TRUE"
+			log_pseudo "Status: Successfully updated Workspace ONE sensor: ${sensor_name}"
+		fi
+		
+		if [[ "${sensor_success}" == "FALSE" ]]; then
+			log_pseudo "Warning: Workspace ONE sensor update timed out or failed for: ${sensor_name}\n${sensor_response}"
+		fi
+	done
+	log_pseudo "Status: Workspace ONE sensor updates completed."
+}
+
 # Prepare pseudo by checking for system, Platform SSO config, and user statuses. This function will exit if any prerequisite isn't succesful.
 workflow_startup() {
 	# Make sure pseudo is running as root first, otherwise start logging.
@@ -393,13 +477,30 @@ end tell
 EOAS
 }
 
+# Open a swiftDialog asking the user if they want to enable Touch ID.
+open_dialog_touch_id_prompt() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
+	sleep 0.1
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Touch ID Setup" \
+	--message "The Platform SSO experience is improved when used with your fingerprint reader. Would you like to enable Touch ID for this Mac?  \n  \nTouch ID provides enhanced security and convenience for authentication. \n \nYou can skip this step if your device doesn't have Touch ID or if you prefer not to set it up now." \
+	--icon "SF=touchid,colour=auto" \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text "Enable Touch ID" \
+	--button2text "Skip" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop
+	return $?
+}
+
 # Open a swiftDialog to inform the user that they need to enable Touch ID.
 open_dialog_touch_id_start() {
 	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
 	sleep 0.1
 	"${SWIFT_DIALOG_BINARY}" \
-	--title "Touch ID Required" \
-	--message "Touch ID is required for all Mac computers at ${DISPLAY_ORGANIZATION_NAME}. Please enable Touch ID by adding at least one fingerprint." \
+	--title "Touch ID Setup" \
+	--message "Please enable Touch ID by adding at least one fingerprint using the System Settings window." \
 	--icon "SF=touchid,colour=auto" \
 	--style mini \
 	--position "${DISPLAY_DIALOG_POSITION}" \
@@ -431,6 +532,30 @@ open_dialog_touch_id_success() {
 # The full workflow to check Touch ID status and if required open interfaces and dialogs to enable Touch ID.
 workflow_touch_id() {
 	check_touch_id_user_status
+	
+	# If Touch ID is already enabled, skip the workflow
+	if [[ "${touch_id_user_status}" == "TRUE" ]]; then
+		log_pseudo "Status: Touch ID is already enabled for local user ${current_user_account_name} (${current_user_id})."
+		return 0
+	fi
+	
+	# Check if Touch ID is optional - if so, ask the user; if not, proceed directly to setup
+	if [[ "${TOUCH_ID_OPTIONAL}" == "TRUE" ]]; then
+		# Ask user if they want to enable Touch ID
+		open_dialog_touch_id_prompt
+		local dialog_exit_code=$?
+		
+		# If user clicked "Skip" (button 2), swiftDialog returns exit code 2
+		if [[ $dialog_exit_code -eq 2 ]]; then
+			log_pseudo "Status: User chose to skip Touch ID setup."
+			return 0
+		fi
+		
+		log_pseudo "Status: User chose to enable Touch ID."
+	else
+		log_pseudo "Status: Touch ID is required and will be configured for local user ${current_user_account_name} (${current_user_id})."
+	fi
+	
 	touch_id_workflow_timer=0
 	touch_id_workflow_active="FALSE"
 	while [[ "${touch_id_user_status}" == "FALSE" ]] || { [[ "${touch_id_user_status}" == "TRUE" ]] && [[ "$(check_touch_id_fingerprint_sheet_active)" == "TRUE" ]]; }; do
@@ -457,14 +582,10 @@ workflow_touch_id() {
 		check_touch_id_user_status
 		((touch_id_workflow_timer++))
 	done
-	if [[ "${touch_id_workflow_active}" == "TRUE" ]]; then
-		focus_touch_id_settings
-		open_dialog_touch_id_success
-		killall "System Settings" >/dev/null 2>&1
-		log_pseudo "Status: Touch ID is now enabled for local user ${current_user_account_name} (${current_user_id}). The workflow took ${touch_id_workflow_timer} seconds to complete."
-	else
-		log_pseudo "Status: Touch ID is already enabled for local user ${current_user_account_name} (${current_user_id})."
-	fi
+	focus_touch_id_settings
+	open_dialog_touch_id_success
+	killall "System Settings" >/dev/null 2>&1
+	log_pseudo "Status: Touch ID is now enabled for local user ${current_user_account_name} (${current_user_id}). The workflow took ${touch_id_workflow_timer} seconds to complete."
 }
 
 # MARK: *** Platform SSO Workflow ***
@@ -675,6 +796,7 @@ main() {
 	workflow_touch_id # This function only completes if the user has enabled Touch ID. Comment this line to skip this workflow.
 	workflow_psso # This function only completes if the user has registred with Platform SSO.
 	[[ -e "${JAMF_PRO_BINARY}" ]] && jamf_pro_update_inventory # This function only updates Jamf Pro inventory if a workflow actually ran.
+	[[ -e "${WORKSPACE_ONE_BINARY}" ]] && workspace_one_update_inventory # This function registers the device with Workspace ONE if a workflow actually ran.
 }
 
 main "$@"
