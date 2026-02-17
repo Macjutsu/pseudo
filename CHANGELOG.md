@@ -34,7 +34,7 @@
 ### Specific Changes (1.0.0-beta2)
 
 - New optional `CHECK_REQUIRED_CONFIG_PROFILES` paramater allows you to specify a comma-separated list of configuration profile identifiers that should be installed prior to running the `pseudo` workflow. This fail-safe mechanism prevents the workflow from running if the computer doesn't have all the appropriate configuration profiles required for your Platform SSO implementation.
-- New validation to check if Touch ID hardware is available to the system. (Shout out to @acodega, @dan-snelson, and @alexfinn for their help identifying methods for this!)
+- New validation to check if Touch ID hardware is available to the system.  (Shout out to @acodega, @dan-snelson, @alexfinn, and @nonpunctual for their help identifying methods for this!)
 - New optional `TOUCH_ID_CONFIG` parameter allows you to control the Touch ID registration workflow. Setting this parameter to `TOUCH_ID_CONFIG="REQUIRED"` enforces the Touch ID registration workflow, while setting it to `TOUCH_ID_CONFIG="OPTIONAL"` only presents the user with the opportunity to enable Touch ID. Finally, leaving this parameter blank `TOUCH_ID_CONFIG=""`, fully disables the Touch ID workflow. (Thanks to @patgmac for assisting with this new feature!)
 - New Touch ID "introduction" dialogs for both required and optional workflows.
 - New Workspace ONE integration automatically update sensors and computer inventory after the Platform SSO registration has completed. (Thanks to @patgmac for this new feature!)
