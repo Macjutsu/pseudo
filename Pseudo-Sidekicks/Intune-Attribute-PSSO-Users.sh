@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# This Jamf Pro Extension Attribute returns the list of Platform SSO registered users.
+# This Intune Custom Attribute returns the list of Platform SSO registered users.
 # shellcheck disable=SC2012,SC2024,SC2207
 
 local_users=($(dscl . list /Users | grep -v '^_'))
@@ -13,9 +13,9 @@ done
 IFS=$'\n'
 
 if [[ ${#psso_enabled_users[@]} -gt 0 ]]; then
-	echo "<result>${psso_enabled_users[*]}</result>"
+	echo "${psso_enabled_users[*]}"
 else
-	echo "<result>No Platform SSO Users</result>"
+	echo "No Platform SSO Users"
 fi
 
 exit 0

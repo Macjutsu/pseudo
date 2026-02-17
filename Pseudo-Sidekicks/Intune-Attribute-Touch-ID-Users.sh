@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# This Jamf Pro Extension Attribute returns the list of Touch ID enabled users.
+# This Intune Custom Attribute returns the list of Touch ID enabled users.
 # shellcheck disable=SC2012,SC2024,SC2207
 
 ioreg_result=$(ioreg -l 2>/dev/null)
 if [[ $(echo "${ioreg_result}" | grep -c -e '\"AppleBiometricSensor\"=[1-9]') -gt 0 ]] || [[ $(echo "${ioreg_result}" | grep -c -e 'with Touch ID') -gt 0 ]]; then
 	bioutil_users_ids=($(bioutil -c -s | awk '/User/ {print $2 $3}'))
 else
-	echo "<result>No Touch ID Hardware</result>"
+	echo "No Touch ID Hardware"
 	exit 0
 fi
 
@@ -18,9 +18,9 @@ done
 
 IFS=$'\n'
 if [[ ${#bioutil_enabled_users[@]} -gt 0 ]]; then
-	echo "<result>${bioutil_enabled_users[*]}</result>"
+	echo "${bioutil_enabled_users[*]}"
 else
-	echo "<result>No Touch ID Users</result>"
+	echo "No Touch ID Users"
 fi
 
 exit 0
