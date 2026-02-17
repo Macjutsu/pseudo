@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # This Jamf Pro Extension Attribute returns the list of Platform SSO registered users.
+# shellcheck disable=SC2012,SC2024,SC2207
+
 local_users=($(dscl . list /Users | grep -v '^_'))
 psso_enabled_users=()
 
@@ -13,7 +15,7 @@ IFS=$'\n'
 if [[ ${#psso_enabled_users[@]} -gt 0 ]]; then
 	echo "<result>${psso_enabled_users[*]}</result>"
 else
-	echo "<result>False</result>"
+	echo "<result>No Platform SSO Users</result>"
 fi
 
 exit 0

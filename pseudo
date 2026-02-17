@@ -7,9 +7,9 @@
 # The next line disables specific ShellCheck codes (https://github.com/koalaman/shellcheck) for the entire script.
 # shellcheck disable=SC2012,SC2024,SC2207
 
-PSEUDO_VERSION="1.0.0-beta1"
+PSEUDO_VERSION="1.0.0-beta2"
 readonly PSEUDO_VERSION
-PSEUDO_DATE="2026/09/26"
+PSEUDO_DATE="2026/02/17"
 readonly PSEUDO_DATE
 PSEUDO_USER_AGENT="pseudo/${PSEUDO_VERSION} $(curl --version | head -1 | sed -e 's/curl /curl\//')"
 readonly PSEUDO_USER_AGENT
@@ -19,6 +19,20 @@ readonly PSEUDO_USER_AGENT
 
 # Set default parameters that are used throughout the script.
 set_defaults() {
+	# Optional check for the installation of configuration profiles that would be required for the Platform SSO workflow.
+	# The format is a comma-separated list of configuration profile identifiers (no spacing around commas and no comma required if only specifying a single item).
+	# Configuration profile identifiers include display names, UUIDs, or any other matching text string. A blank "" value will disable this optional check.
+	CHECK_REQUIRED_CONFIG_PROFILES=""
+	readonly CHECK_REQUIRED_CONFIG_PROFILES
+	
+	# Optionally enable the Touch ID configuration workflow.
+	# The supported values are "REQUIRED" or "OPTIONAL". Any other value, including blank "" , will disable the Touch ID workflow:
+	TOUCH_ID_CONFIG="REQUIRED"
+	readonly TOUCH_ID_CONFIG
+	
+	# *** The remaining parameters are NOT OPTIONAL but can be modified to better fit your workflow. ***
+	################################################################################
+	
 	# The name of your company or organization that appears in dialogs:
 	DISPLAY_ORGANIZATION_NAME="Macjutsu"
 	readonly DISPLAY_ORGANIZATION_NAME
@@ -32,24 +46,20 @@ set_defaults() {
 	DISPLAY_DIALOG_POSITION="topright"
 	readonly DISPLAY_DIALOG_POSITION
 	
-	# Make Touch ID setup optional for users. Set to "TRUE" to allow users to skip Touch ID setup, or "FALSE" to require it.
-	TOUCH_ID_OPTIONAL="TRUE"
-	readonly TOUCH_ID_OPTIONAL
-	
 	# Path to the log for the main pseudo workflow:
 	PSEUDO_LOG="/var/log/pseudo.log"
 	readonly PSEUDO_LOG
 	
 	# The number of seconds to timeout various workflow processes if no progress is reported.
-	TIMEOUT_DEFAULT_SECONDS=300
+	TIMEOUT_DEFAULT_SECONDS=30
 	readonly TIMEOUT_DEFAULT_SECONDS
 	
 	# Target version for swiftDialog:
-	SWIFT_DIALOG_TARGET_VERSION="3.0.0.4925"
+	SWIFT_DIALOG_TARGET_VERSION="3.0.0.4933"
 	readonly SWIFT_DIALOG_TARGET_VERSION
 	
 	# URL to the swiftDialog package installer download:
-	SWIFT_DIALOG_DOWNLOAD_URL="https://github.com/swiftDialog/swiftDialog/releases/download/v3.0.0Beta4/dialog-3.0.0-4925.pkg"
+	SWIFT_DIALOG_DOWNLOAD_URL="https://github.com/swiftDialog/swiftDialog/releases/download/v3.0.0Beta5/dialog-3.0.0-4933.pkg"
 	readonly SWIFT_DIALOG_DOWNLOAD_URL
 	
 	# Path to the local swiftDialog:
@@ -132,13 +142,40 @@ check_system() {
 		[[ -n "${macos_version_extra}" ]] && macos_version_full="${macos_title} ${macos_version_major}.${macos_version_minor}${macos_version_extra}-${macos_build}"
 		[[ -z "${macos_version_extra}" ]] && macos_version_full="${macos_title} ${macos_version_major}.${macos_version_minor}-${macos_build}"
 	fi
-	if [[ "${mac_cpu_architecture}" == "arm64" ]]; then # Mac computers with Apple Silicon.
-		log_pseudo "Status: Mac computer with Apple silicon running ${macos_version_full}."
-	else # Mac computers with Intel.
-		log_pseudo "Status: Mac computer with Intel running ${macos_version_full}."
+	local ioreg_result
+	ioreg_result=$(ioreg -l 2>/dev/null)
+	if [[ $(echo "${ioreg_result}" | grep -c -e '\"AppleBiometricSensor\"=[1-9]') -gt 0 ]]; then
+		[[ "${mac_cpu_architecture}" == "arm64" ]] && log_pseudo "Status: Mac computer with Apple silicon and built-in Touch ID sensor running ${macos_version_full}."
+		[[ "${mac_cpu_architecture}" == "i386" ]] && log_pseudo "Status: Mac computer with Intel and built-in Touch ID sensor running running ${macos_version_full}."
+		touch_id_hardware_status="INTERNAL"
+	elif [[ $(echo "${ioreg_result}" | grep -c -e 'with Touch ID') -gt 0 ]]; then
+		[[ "${mac_cpu_architecture}" == "arm64" ]] && log_pseudo "Status: Mac computer with Apple silicon and Magic Keyboard with Touch ID running ${macos_version_full}."
+		[[ "${mac_cpu_architecture}" == "i386" ]] && log_pseudo "Status: Mac computer with Intel and Magic Keyboard with Touch ID running ${macos_version_full}."
+		touch_id_hardware_status="EXTERNAL"
+	else
+		[[ "${mac_cpu_architecture}" == "arm64" ]] && log_pseudo "Status: Mac computer with Apple silicon (no Touch ID) running ${macos_version_full}."
+		[[ "${mac_cpu_architecture}" == "i386" ]] && log_pseudo "Status: Mac computer with Intel (no Touch ID) running ${macos_version_full}."
+		touch_id_hardware_status="FALSE"
 	fi
 }
 
+# Validate installed configuration profiles based on "${CHECK_REQUIRED_CONFIG_PROFILES}" option.
+check_config_profiles() {
+	local check_config_profiles_error
+	check_config_profiles_error="FALSE"
+	local profiles_result
+	profiles_result=$(profiles list -output stdout-xml)
+	local previous_ifs
+	previous_ifs="${IFS}"
+	IFS=','
+	local required_config_profiles_array
+	read -r -a required_config_profiles_array <<<"${CHECK_REQUIRED_CONFIG_PROFILES}"
+	for required_config_profile in "${required_config_profiles_array[@]}"; do
+		[[ $(echo "${profiles_result}" | grep -c "${required_config_profile}") -eq 0 ]] && log_pseudo "Error: No installed confiugration profile matches the following required identifier: ${required_config_profile}" && check_config_profiles_error="TRUE"
+	done
+	IFS="${previous_ifs}"
+	[[ "${check_config_profiles_error}" == TRUE ]] && log_pseudo "Exit: A required configuration profile is not currently installed." && exit_error
+}
 
 # Collect parameters for Platform SSO configuration information.
 check_psso_system_config() {
@@ -227,96 +264,25 @@ run_as_user() {
 	launchctl asuser "${current_user_id}" sudo -u "${current_user_account_name}" "$@"
 }
 
-# Update Jamf Pro device compliance and inventory if workflow was successful.
-jamf_pro_update_inventory() {
-	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
-		log_pseudo "Status: Gathering Jamf Pro device compliance information..."
-		local jamf_aad_response
-		jamf_aad_response=$(run_as_user "${JAMF_PRO_AAD_BINARY}" gatherAADInfo 2>&1)
-		if [[ $(echo "${jamf_aad_response}" | grep -c 'AAD ID acquired') -gt 0 ]]; then
-			log_pseudo "Status: Jamf Pro device compilance information successfully updated."
-		else
-			log_pseudo "Error: Could not gather Jamf Pro device compilance information:\n${jamf_aad_response}"
-		fi
-	fi
-	if [[ "${touch_id_workflow_active}" == "TRUE" ]] || [[ "${psso_workflow_active}" == "TRUE" ]]; then
-		log_pseudo "Status: Updating Jamf Pro inventory..."
-		local jamf_recon_response
-		jamf_recon_response=$("${JAMF_PRO_BINARY}" recon -verbose 2>&1)
-		if [[ $(echo "${jamf_recon_response}" | grep -c 'Submitting data') -gt 0 ]]; then
-			log_pseudo "Status: Jamf Pro inventory successfully updated."
-		else
-			log_pseudo "Error: Could not update Jamf Pro inventory:\n${jamf_recon_response}"
-		fi
-	fi
-}
-
-# Open a dialog to inform the user about Workspace ONE registration.
-open_dialog_workspace_one_sync() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
-	sleep 0.1
-	"${SWIFT_DIALOG_BINARY}" \
-	--title "Device Registration" \
-	--message "A Workspace ONE Intelligent Hub window will now appear.  \n  \nPlease select your account from the list and click \"Continue\"." \
-	--icon "${psso_dialog_icon}" \
-	--style mini \
-	--position "${DISPLAY_DIALOG_POSITION}" \
-	--button1text "OK" \
-	--quitkey p \
-	--hidedefaultkeyboardaction \
-	--ontop
-	sleep 0.1
-}
-
-# Update Workspace ONE Intelligent Hub inventory if workflow was successful.
-workspace_one_update_inventory() {
-	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
-		log_pseudo "Status: Syncing device inventory with Workspace ONE Intelligent Hub..."
-		open_dialog_workspace_one_sync
-		local hubcli_response
-		hubcli_response=$("${WORKSPACE_ONE_BINARY}" sync 2>&1)
-		if [[ $(echo "${hubcli_response}" | grep -c 'Sync started.') -gt 0 ]]; then
-			log_pseudo "Status: Workspace ONE inventory sync successfully started."
-		else
-			log_pseudo "Warning: Could not start Workspace ONE inventory sync:\n${hubcli_response}"
-		fi
-		
-		# Update sensors if enabled
-		if [[ "${WORKSPACE_ONE_SENSORS_ENABLED}" == "TRUE" ]] && [[ -n "${WORKSPACE_ONE_SENSORS}" ]]; then
-			workspace_one_update_sensors
-		fi
-	fi
-}
-
-# Update Workspace ONE sensors after Platform SSO enrollment.
-workspace_one_update_sensors() {
-	log_pseudo "Status: Updating Workspace ONE sensors..."
-	
-	# Convert space-separated string to array
-	IFS=' ' read -ra sensor_array <<< "${WORKSPACE_ONE_SENSORS}"
-	
-	for sensor_name in "${sensor_array[@]}"; do
-		[[ -z "${sensor_name}" ]] && continue  # Skip empty entries
-		
-		log_pseudo "Status: Triggering Workspace ONE sensor: ${sensor_name}"
-		local sensor_response
-		local sensor_timer=0
-		local sensor_success="FALSE"
-		
-		# Trigger the sensor
-		sensor_response=$("${WORKSPACE_ONE_BINARY}" sensors --trigger "${sensor_name}" 2>&1)
-		
-		# Check for success message
-		if [[ $(echo "${sensor_response}" | grep -c 'Successfully executed the Sensor and reported the result to UEM.') -gt 0 ]]; then
-			sensor_success="TRUE"
-			log_pseudo "Status: Successfully updated Workspace ONE sensor: ${sensor_name}"
-		fi
-		
-		if [[ "${sensor_success}" == "FALSE" ]]; then
-			log_pseudo "Warning: Workspace ONE sensor update timed out or failed for: ${sensor_name}\n${sensor_response}"
-		fi
-	done
-	log_pseudo "Status: Workspace ONE sensor updates completed."
+# Hide all visible applications.
+hide_all_apps() {
+	osascript <<EOAS
+tell application "Finder"
+	if (count of windows) is not 0 then
+		tell application "Finder" to close every window
+		delay 0.1
+	end if
+end tell
+tell application "System Events"
+	set visibleApps to every process whose visible is true and name is not "Finder"
+	repeat with anApp in visibleApps
+		tell anApp
+			set visible to false
+		end tell
+		delay 0.1
+	end repeat
+end tell
+EOAS
 }
 
 # Prepare pseudo by checking for system, Platform SSO config, and user statuses. This function will exit if any prerequisite isn't succesful.
@@ -329,6 +295,7 @@ workflow_startup() {
 	# Initial system checks.
 	check_system
 	[[ $macos_version_major -lt 14 ]] && log_pseudo "Exit: This computer is running macOS ${macos_version_major} and pseudo requires macOS 15 Sequoia or newer." && exit_error
+	[[ -n "${CHECK_REQUIRED_CONFIG_PROFILES}" ]]  && check_config_profiles
 	
 	# Make sure that we have an active local user account.
 	check_current_user
@@ -393,6 +360,103 @@ workflow_startup() {
 		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Exit: Unable to validate swiftDialog after re-installation."
 	fi
 	[[ "${swift_dialog_valid}" == "FALSE" ]] && exit_error
+}
+
+# MARK: *** Jamf Pro Integration ***
+################################################################################
+
+# Update Jamf Pro device compliance and inventory if workflow was successful.
+jamf_pro_update_inventory() {
+	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
+		log_pseudo "Status: Gathering Jamf Pro device compliance information..."
+		local jamf_aad_response
+		jamf_aad_response=$(run_as_user "${JAMF_PRO_AAD_BINARY}" gatherAADInfo 2>&1)
+		if [[ $(echo "${jamf_aad_response}" | grep -c 'AAD ID acquired') -gt 0 ]]; then
+			log_pseudo "Status: Jamf Pro device compilance information successfully updated."
+		else
+			log_pseudo "Error: Could not gather Jamf Pro device compilance information:\n${jamf_aad_response}"
+		fi
+	fi
+	if [[ "${touch_id_workflow_active}" == "TRUE" ]] || [[ "${psso_workflow_active}" == "TRUE" ]]; then
+		log_pseudo "Status: Updating Jamf Pro inventory..."
+		local jamf_recon_response
+		jamf_recon_response=$("${JAMF_PRO_BINARY}" recon -verbose 2>&1)
+		if [[ $(echo "${jamf_recon_response}" | grep -c 'Submitting data') -gt 0 ]]; then
+			log_pseudo "Status: Jamf Pro inventory successfully updated."
+		else
+			log_pseudo "Error: Could not update Jamf Pro inventory:\n${jamf_recon_response}"
+		fi
+	fi
+}
+
+# MARK: *** Workspace ONE Integration ***
+################################################################################
+
+# Open a dialog to inform the user about Workspace ONE registration.
+open_dialog_workspace_one_sync() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
+	sleep 0.1
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Device Registration" \
+	--message "A Workspace ONE Intelligent Hub window will now appear.  \n  \nPlease select your account from the list and click \"Continue\"." \
+	--icon "${psso_dialog_icon}" \
+	--mini \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text "OK" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop
+	sleep 0.1
+}
+
+# Update Workspace ONE Intelligent Hub inventory if workflow was successful.
+workspace_one_update_inventory() {
+	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
+		log_pseudo "Status: Syncing device inventory with Workspace ONE Intelligent Hub..."
+		open_dialog_workspace_one_sync
+		local hubcli_response
+		hubcli_response=$("${WORKSPACE_ONE_BINARY}" sync 2>&1)
+		if [[ $(echo "${hubcli_response}" | grep -c 'Sync started.') -gt 0 ]]; then
+			log_pseudo "Status: Workspace ONE inventory sync successfully started."
+		else
+			log_pseudo "Warning: Could not start Workspace ONE inventory sync:\n${hubcli_response}"
+		fi
+		
+		# Update sensors if enabled
+		if [[ "${WORKSPACE_ONE_SENSORS_ENABLED}" == "TRUE" ]] && [[ -n "${WORKSPACE_ONE_SENSORS}" ]]; then
+			workspace_one_update_sensors
+		fi
+	fi
+}
+
+# Update Workspace ONE sensors after Platform SSO enrollment.
+workspace_one_update_sensors() {
+	log_pseudo "Status: Updating Workspace ONE sensors..."
+	
+	# Convert space-separated string to array
+	IFS=' ' read -ra sensor_array <<< "${WORKSPACE_ONE_SENSORS}"
+	
+	for sensor_name in "${sensor_array[@]}"; do
+		[[ -z "${sensor_name}" ]] && continue  # Skip empty entries
+		
+		log_pseudo "Status: Triggering Workspace ONE sensor: ${sensor_name}"
+		local sensor_response
+		local sensor_success="FALSE"
+		
+		# Trigger the sensor
+		sensor_response=$("${WORKSPACE_ONE_BINARY}" sensors --trigger "${sensor_name}" 2>&1)
+		
+		# Check for success message
+		if [[ $(echo "${sensor_response}" | grep -c 'Successfully executed the Sensor and reported the result to UEM.') -gt 0 ]]; then
+			sensor_success="TRUE"
+			log_pseudo "Status: Successfully updated Workspace ONE sensor: ${sensor_name}"
+		fi
+		
+		if [[ "${sensor_success}" == "FALSE" ]]; then
+			log_pseudo "Warning: Workspace ONE sensor update timed out or failed for: ${sensor_name}\n${sensor_response}"
+		fi
+	done
+	log_pseudo "Status: Workspace ONE sensor updates completed."
 }
 
 # MARK: *** Touch ID Workflow ***
@@ -477,15 +541,39 @@ end tell
 EOAS
 }
 
-# Open a swiftDialog asking the user if they want to enable Touch ID.
-open_dialog_touch_id_prompt() {
+# Open an interactive swiftDialog informing the user that they are required to enable Touch ID.
+open_dialog_touch_id_required() {
 	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
 	sleep 0.1
+	hide_all_apps
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Touch ID Setup Required" \
+	--message "**Touch ID is required for all Mac computers at ${DISPLAY_ORGANIZATION_NAME}.**<br><br>Touch ID provides enhanced security and convenience by allowing you to authenticate using the Mac computer's fingerprint sensor." \
+	--icon "SF=touchid,colour=auto" \
+	--small \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--timer "${TIMEOUT_DEFAULT_SECONDS}" \
+	--hidetimerbar \
+	--button1text "Enable Touch ID" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop
+	return $?
+}
+
+# Open an interactive swiftDialog asking the user if they want to enable Touch ID.
+open_dialog_touch_id_optional() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
+	sleep 0.1
+	hide_all_apps
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Touch ID Setup" \
-	--message "The Platform SSO experience is improved when used with your fingerprint reader. Would you like to enable Touch ID for this Mac?  \n  \nTouch ID provides enhanced security and convenience for authentication. \n \nYou can skip this step if your device doesn't have Touch ID or if you prefer not to set it up now." \
+	--message "**Please take a few moments to enable Touch ID.**<br><br>Touch ID provides enhanced security and convenience by allowing you to authenticate using the Mac computer's fingerprint sensor." \
 	--icon "SF=touchid,colour=auto" \
+	--small \
 	--position "${DISPLAY_DIALOG_POSITION}" \
+	--timer "${TIMEOUT_DEFAULT_SECONDS}" \
+	--hidetimerbar \
 	--button1text "Enable Touch ID" \
 	--button2text "Skip" \
 	--quitkey p \
@@ -494,15 +582,15 @@ open_dialog_touch_id_prompt() {
 	return $?
 }
 
-# Open a swiftDialog to inform the user that they need to enable Touch ID.
+# Open a swiftDialog to assist while the user enables Touch ID.
 open_dialog_touch_id_start() {
 	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
 	sleep 0.1
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Touch ID Setup" \
-	--message "Please enable Touch ID by adding at least one fingerprint using the System Settings window." \
+	--message "Enable Touch ID by adding at least one fingerprint in the Touch ID settings." \
 	--icon "SF=touchid,colour=auto" \
-	--style mini \
+	--mini \
 	--position "${DISPLAY_DIALOG_POSITION}" \
 	--button1text none \
 	--quitkey p \
@@ -520,7 +608,7 @@ open_dialog_touch_id_success() {
 	--title "Touch ID Enabled" \
 	--message "Thank you for enabling Touch ID! You can register additional fingerprints or click \"OK\" to close the Touch ID settings." \
 	--icon "SF=touchid,colour=auto" \
-	--style mini \
+	--mini \
 	--position "${DISPLAY_DIALOG_POSITION}" \
 	--button1text "OK" \
 	--quitkey p \
@@ -531,31 +619,40 @@ open_dialog_touch_id_success() {
 
 # The full workflow to check Touch ID status and if required open interfaces and dialogs to enable Touch ID.
 workflow_touch_id() {
-	check_touch_id_user_status
-	
-	# If Touch ID is already enabled, skip the workflow
-	if [[ "${touch_id_user_status}" == "TRUE" ]]; then
+	# If Touch ID is already enabled then skip the workflow
+	[[ "${touch_id_hardware_status}" != "FALSE" ]] && check_touch_id_user_status
+	if [[ "${touch_id_hardware_status}" != "FALSE" ]] && [[ "${touch_id_user_status}" == "TRUE" ]]; then
 		log_pseudo "Status: Touch ID is already enabled for local user ${current_user_account_name} (${current_user_id})."
 		return 0
 	fi
 	
-	# Check if Touch ID is optional - if so, ask the user; if not, proceed directly to setup
-	if [[ "${TOUCH_ID_OPTIONAL}" == "TRUE" ]]; then
-		# Ask user if they want to enable Touch ID
-		open_dialog_touch_id_prompt
-		local dialog_exit_code=$?
-		
-		# If user clicked "Skip" (button 2), swiftDialog returns exit code 2
-		if [[ $dialog_exit_code -eq 2 ]]; then
-			log_pseudo "Status: User chose to skip Touch ID setup."
-			return 0
-		fi
-		
-		log_pseudo "Status: User chose to enable Touch ID."
+	# Handle the ${TOUCH_ID_CONFIG} option.
+	local dialog_touch_id_result
+	if [[ "${TOUCH_ID_CONFIG}" == "REQUIRED" ]]; then
+		[[ "${touch_id_hardware_status}" == "FALSE" ]] && log_pseudo "Warning: Can't enforce Touch ID enablement because this computer does not have access to Touch ID hardware." && return 0
+		log_pseudo "Status: Informing user that Touch ID is required and will be configured for local user ${current_user_account_name} (${current_user_id})."
+		open_dialog_touch_id_required
+		dialog_touch_id_result=$?
+	elif [[ "${TOUCH_ID_CONFIG}" == "OPTIONAL" ]]; then
+		[[ "${touch_id_hardware_status}" == "FALSE" ]] && log_pseudo "Warning: Can't ask user to enable Touch ID because this computer does not have access to Touch ID hardware." && return 0
+		log_pseudo "Status: Asking local user ${current_user_account_name} (${current_user_id}) if they want to enable optional Touch ID."
+		open_dialog_touch_id_optional
+		dialog_touch_id_result=$?
 	else
-		log_pseudo "Status: Touch ID is required and will be configured for local user ${current_user_account_name} (${current_user_id})."
+		log_pseudo "Status: Touch ID workflow is disabled."
+		return 0
 	fi
 	
+	# Handle the results of swiftDialog ${dialog_touch_id_result}.
+	if [[ "${dialog_touch_id_result}" -eq 2 ]]; then
+		log_pseudo "Status: The user chose to skip the optional Touch ID enablement." && return 0
+	elif [[ "${dialog_touch_id_result}" -eq 4 ]]; then
+		log_pseudo "Error: The initial Touch ID user dialog timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && exit_error
+	elif [[ "${dialog_touch_id_result}" -gt 0 ]]; then
+		log_pseudo "Error: The initial Touch ID user dialog returned unexpected result: ${dialog_touch_id_result}" && exit_error
+	fi
+	
+	# At this point it's time to open the Touch ID system settings.
 	touch_id_workflow_timer=0
 	touch_id_workflow_active="FALSE"
 	while [[ "${touch_id_user_status}" == "FALSE" ]] || { [[ "${touch_id_user_status}" == "TRUE" ]] && [[ "$(check_touch_id_fingerprint_sheet_active)" == "TRUE" ]]; }; do
@@ -603,6 +700,8 @@ check_psso_user_status() {
 
 # Pre-enable relevant password AutoFill extensions.
 enable_psso_autofill_extensions() {
+	local previous_ifs
+	previous_ifs="${IFS}"
 	IFS=$'\n'
 	local plugin_kit_response
 	[[ "${psso_extension_ID}" == "com.microsoft.CompanyPortalMac.ssoextension" ]] && plugin_kit_response=($(run_as_user pluginkit -m 2>/dev/null | grep 'com.microsoft.CompanyPortalMac'))
@@ -614,6 +713,7 @@ enable_psso_autofill_extensions() {
 			run_as_user pluginkit -e use -i "$(echo "${plugin_kit_item}" | awk -F' ' '{print $1}' | sed -e 's/(.*$//')" >/dev/null 2>&1
 		fi
 	done
+	IFS="${previous_ifs}"
 }
 
 # Check to see if the Platform SSO registration window is open and return "TRUE" or "FALSE".
@@ -722,9 +822,9 @@ open_dialog_psso_start() {
 	sleep 0.1
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Platform SSO Registration Required" \
-	--message "Platform SSO is required all for Mac computers at ${DISPLAY_ORGANIZATION_NAME}. Please click the \"Continue\" button to sign in and register with Platform SSO." \
+	--message "**Platform SSO is required for all Mac computers at ${DISPLAY_ORGANIZATION_NAME}.**<br><br>Please click the \"Continue\" button to sign in and register with Platform SSO." \
 	--icon "${psso_dialog_icon}" \
-	--style mini \
+	--small \
 	--position "${DISPLAY_DIALOG_POSITION}" \
 	--button1text none \
 	--quitkey p \
@@ -742,7 +842,7 @@ open_dialog_psso_success() {
 	--title "Platform SSO Registration Complete" \
 	--message "Thank you for registering Platform SSO! Click \"OK\" to close this dialog." \
 	--icon "${psso_dialog_icon}" \
-	--style mini \
+	--mini \
 	--position "${DISPLAY_DIALOG_POSITION}" \
 	--button1text "OK" \
 	--quitkey p \
@@ -755,6 +855,7 @@ open_dialog_psso_success() {
 # The full workflow to check Platform SSO status and if required open interfaces and dialogs to register with Platform SSO.
 workflow_psso() {
 	check_psso_user_status
+	local workflow_psso_timer
 	workflow_psso_timer=0
 	psso_workflow_active="FALSE"
 	while [[ "${psso_user_status_dscl}" == "FALSE" ]] || [[ "${psso_user_status_login_name}" == "FALSE" ]]; do
@@ -792,9 +893,9 @@ workflow_psso() {
 ################################################################################
 
 main() {
-	workflow_startup # This function only completes if the system and user are ready for the registration workflow.
-	workflow_touch_id # This function only completes if the user has enabled Touch ID. Comment this line to skip this workflow.
-	workflow_psso # This function only completes if the user has registred with Platform SSO.
+	workflow_startup # This function only completes if the system and user are ready to complete further workflows.
+	workflow_touch_id # If Touch ID is available and required then this function only completes if the user has enabled Touch ID.
+	workflow_psso # This function only completes if the user has successfully registred with Platform SSO.
 	[[ -e "${JAMF_PRO_BINARY}" ]] && jamf_pro_update_inventory # This function only updates Jamf Pro inventory if a workflow actually ran.
 	[[ -e "${WORKSPACE_ONE_BINARY}" ]] && workspace_one_update_inventory # This function registers the device with Workspace ONE if a workflow actually ran.
 }

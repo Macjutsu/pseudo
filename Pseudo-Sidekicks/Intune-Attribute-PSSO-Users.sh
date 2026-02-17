@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # This Intune Custom Attribute returns the list of Platform SSO registered users.
+# shellcheck disable=SC2012,SC2024,SC2207
+
 local_users=($(dscl . list /Users | grep -v '^_'))
 psso_enabled_users=()
 
@@ -13,7 +15,7 @@ IFS=$'\n'
 if [[ ${#psso_enabled_users[@]} -gt 0 ]]; then
 	echo "${psso_enabled_users[*]}"
 else
-	echo "None"
+	echo "No Platform SSO Users"
 fi
 
 exit 0
