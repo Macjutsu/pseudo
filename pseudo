@@ -51,7 +51,7 @@ set_defaults() {
 	readonly PSEUDO_LOG
 	
 	# The number of seconds to timeout various workflow processes if no progress is reported.
-	TIMEOUT_DEFAULT_SECONDS=30
+	TIMEOUT_DEFAULT_SECONDS=300
 	readonly TIMEOUT_DEFAULT_SECONDS
 	
 	# Target version for swiftDialog:
