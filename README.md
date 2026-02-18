@@ -40,3 +40,5 @@ __The user has registered Platform SSO__
 Detailed `pseudo` requirements and version progress can be found in the [Change Log](https://github.com/Macjutsu/pseudo/blob/main/CHANGELOG.md).
 
 More P.S.E.U.D.O. documentation is coming soon...
+
+You can also join the conversation at the [Mac Admins Foundation Slack](https://www.macadmins.org) in channel [#pseudo](https://macadmins.slack.com/archives/C0AFEC0S2KX).
