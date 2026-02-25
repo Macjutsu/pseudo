@@ -7,9 +7,10 @@
 # The next line disables specific ShellCheck codes (https://github.com/koalaman/shellcheck) for the entire script.
 # shellcheck disable=SC2012,SC2024,SC2207
 
-PSEUDO_VERSION="1.0.0-beta2"
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+PSEUDO_VERSION="1.0.0-beta3"
 readonly PSEUDO_VERSION
-PSEUDO_DATE="2026/02/17"
+PSEUDO_DATE="2026/02/25"
 readonly PSEUDO_DATE
 PSEUDO_USER_AGENT="pseudo/${PSEUDO_VERSION} $(curl --version | head -1 | sed -e 's/curl /curl\//')"
 readonly PSEUDO_USER_AGENT
@@ -19,9 +20,10 @@ readonly PSEUDO_USER_AGENT
 
 # Set default parameters that are used throughout the script.
 set_defaults() {
-	# Optional check for the installation of configuration profiles that would be required for the Platform SSO workflow.
+	# Optionally check for the installation of configuration profiles that would be required for the Platform SSO workflow.
 	# The format is a comma-separated list of configuration profile identifiers (no spacing around commas and no comma required if only specifying a single item).
-	# Configuration profile identifiers include display names, UUIDs, or any other matching text string. A blank "" value will disable this optional check.
+	# Configuration profile identifiers include display names, UUIDs, or any other matching text string.
+	# A blank "" value will disable this optional validation.
 	CHECK_REQUIRED_CONFIG_PROFILES=""
 	readonly CHECK_REQUIRED_CONFIG_PROFILES
 	
@@ -30,16 +32,28 @@ set_defaults() {
 	TOUCH_ID_CONFIG="REQUIRED"
 	readonly TOUCH_ID_CONFIG
 	
+	# Optionally (after succesfull Platform SSO enrollment) update Jamf Pro device compliance and inventory.
+	# Any other value besides "TRUE" will disable this option.
+	UPDATE_JAMF_PRO=""
+	readonly TOUCH_ID_CONFIG
+	
+	# Optionally (after succesfull Platform SSO enrollment) sync Workspace ONE.
+	# Any other value besides "TRUE" will disable this option.
+	UPDATE_WORKSPACE_ONE=""
+	readonly UPDATE_WORKSPACE_ONE
+	
+	# Optionally (after succesfull Platform SSO enrollment) update Workspace ONE sensor(s).
+	# The format is a comma-separated list of Workspace ONE sensor names to trigger (no spacing around commas and no comma required if only specifying a single item).
+	# A blank "" value will disable this option.
+	UPDATE_WORKSPACE_ONE_SENSORS=""
+	readonly UPDATE_WORKSPACE_ONE_SENSORS
+	
 	# *** The remaining parameters are NOT OPTIONAL but can be modified to better fit your workflow. ***
 	################################################################################
 	
 	# The name of your company or organization that appears in dialogs:
-	DISPLAY_ORGANIZATION_NAME="Macjutsu"
+	DISPLAY_ORGANIZATION_NAME="PretendCo"
 	readonly DISPLAY_ORGANIZATION_NAME
-	
-	# The default icon for the Platform SSO dialog if a service-specific icon (like Company Portal or Okta Verify) can't be found.
-	DISPLAY_ICON_DEFAULT_FILE="/System/Library/PrivateFrameworks/AppSSO.framework/Support/AppSSOAgent.app/Contents/Resources/AppSSOAgentIcon.icns"
-	readonly DISPLAY_ICON_DEFAULT_FILE
 	
 	# The default screen position for dialogs.
 	# Available positions are defined by swiftDialog options: topleft, left, bottomleft, top, center (or centre), bottom, topright, right, or bottomright
@@ -54,17 +68,17 @@ set_defaults() {
 	TIMEOUT_DEFAULT_SECONDS=300
 	readonly TIMEOUT_DEFAULT_SECONDS
 	
+	# Path to the local Extensible SSO managed PLIST.
+	SSO_MANAGED_PLIST="/Library/Managed Preferences/com.apple.extensiblesso.plist"
+	readonly SSO_MANAGED_PLIST
+	
 	# Target version for swiftDialog:
-	SWIFT_DIALOG_TARGET_VERSION="3.0.0.4933"
+	SWIFT_DIALOG_TARGET_VERSION="3.0.0.4952"
 	readonly SWIFT_DIALOG_TARGET_VERSION
 	
 	# URL to the swiftDialog package installer download:
-	SWIFT_DIALOG_DOWNLOAD_URL="https://github.com/swiftDialog/swiftDialog/releases/download/v3.0.0Beta5/dialog-3.0.0-4933.pkg"
+	SWIFT_DIALOG_DOWNLOAD_URL="https://github.com/swiftDialog/swiftDialog/releases/download/v3.0.0/dialog-3.0.0-4952.pkg"
 	readonly SWIFT_DIALOG_DOWNLOAD_URL
-	
-	# Path to the local swiftDialog:
-	SWIFT_DIALOG_APP="/Library/Application Support/Dialog/Dialog.app"
-	readonly SWIFT_DIALOG_APP
 	
 	# Path to the local swiftDialog binary:
 	SWIFT_DIALOG_BINARY="/usr/local/bin/dialog"
@@ -81,18 +95,10 @@ set_defaults() {
 	# Path to the Jamf Pro binary:
 	JAMF_PRO_BINARY="/usr/local/bin/jamf"
 	readonly JAMF_PRO_BINARY
-
+	
 	# Path to the Workspace ONE Intelligent Hub CLI binary:
 	WORKSPACE_ONE_BINARY="/usr/local/bin/hubcli"
 	readonly WORKSPACE_ONE_BINARY
-	
-	# Update Workspace ONE sensor(s) after Platform SSO enrollment. Set to "TRUE" to update sensors, or "FALSE" to skip.
-	WORKSPACE_ONE_SENSORS_ENABLED="TRUE"
-	readonly WORKSPACE_ONE_SENSORS_ENABLED
-	
-	# Space-separated list of Workspace ONE sensor names to trigger after Platform SSO enrollment.
-	WORKSPACE_ONE_SENSORS="touchid_status platformsso_status"
-	readonly WORKSPACE_ONE_SENSORS
 }
 
 # Append input to the command line and log located at ${PSEUDO_LOG}.
@@ -108,7 +114,7 @@ log_echo() {
 # This optional command line debugging function can be inserted anywhere to interrupt the workflow and wait for the shell user to press Enter to continue.
 interactive_interrupt() {
 	log_pseudo "**** P.S.E.U.D.O. ${PSEUDO_VERSION} - ${PSEUDO_DATE} - INTERACTIVE INTERRUPT - PRESS ENTER TO CONTINUE OR CTRL-C TO EXIT ****"
-	read -n 1 -p -r >/dev/null 2>&1
+	read -n 1 -p -r > /dev/null 2>&1
 }
 
 # Exit the script with no errors.
@@ -123,6 +129,32 @@ exit_error() {
 	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
 	log_pseudo "**** P.S.E.U.D.O. ${PSEUDO_VERSION} - ${PSEUDO_DATE} - EXIT ERROR ****"
 	exit 1
+}
+
+# Used prior to another command or function that should be run as the user.
+run_as_user() {
+	launchctl asuser "${current_user_id}" sudo -u "${current_user_account_name}" "$@"
+}
+
+# Hide all visible applications.
+hide_all_apps() {
+	osascript <<EOAS
+tell application "Finder"
+	if (count of windows) is not 0 then
+		tell application "Finder" to close every window
+		delay 0.1
+	end if
+end tell
+tell application "System Events"
+	set visibleApps to every process whose visible is true and name is not "Finder"
+	repeat with anApp in visibleApps
+		tell anApp
+			set visible to false
+		end tell
+		delay 0.1
+	end repeat
+end tell
+EOAS
 }
 
 # Collect parameters for detailed system information and set a variety of parameters.
@@ -143,7 +175,7 @@ check_system() {
 		[[ -z "${macos_version_extra}" ]] && macos_version_full="${macos_title} ${macos_version_major}.${macos_version_minor}-${macos_build}"
 	fi
 	local ioreg_result
-	ioreg_result=$(ioreg -l 2>/dev/null)
+	ioreg_result=$(ioreg -l 2> /dev/null)
 	if [[ $(echo "${ioreg_result}" | grep -c -e '\"AppleBiometricSensor\"=[1-9]') -gt 0 ]]; then
 		[[ "${mac_cpu_architecture}" == "arm64" ]] && log_pseudo "Status: Mac computer with Apple silicon and built-in Touch ID sensor running ${macos_version_full}."
 		[[ "${mac_cpu_architecture}" == "i386" ]] && log_pseudo "Status: Mac computer with Intel and built-in Touch ID sensor running running ${macos_version_full}."
@@ -159,38 +191,11 @@ check_system() {
 	fi
 }
 
-# Validate installed configuration profiles based on "${CHECK_REQUIRED_CONFIG_PROFILES}" option.
-check_config_profiles() {
-	local check_config_profiles_error
-	check_config_profiles_error="FALSE"
-	local profiles_result
-	profiles_result=$(profiles list -output stdout-xml)
-	local previous_ifs
-	previous_ifs="${IFS}"
-	IFS=','
-	local required_config_profiles_array
-	read -r -a required_config_profiles_array <<<"${CHECK_REQUIRED_CONFIG_PROFILES}"
-	for required_config_profile in "${required_config_profiles_array[@]}"; do
-		[[ $(echo "${profiles_result}" | grep -c "${required_config_profile}") -eq 0 ]] && log_pseudo "Error: No installed confiugration profile matches the following required identifier: ${required_config_profile}" && check_config_profiles_error="TRUE"
-	done
-	IFS="${previous_ifs}"
-	[[ "${check_config_profiles_error}" == TRUE ]] && log_pseudo "Exit: A required configuration profile is not currently installed." && exit_error
-}
-
-# Collect parameters for Platform SSO configuration information.
-check_psso_system_config() {
-	psso_extension_ID="FALSE"
-	psso_display_name="FALSE"
-	app_sso_response=$(run_as_user app-sso platform -s)
-	[[ $(echo "${app_sso_response}" | grep -c 'extensionIdentifier') -gt 0 ]] && psso_extension_ID=$(echo "${app_sso_response}" | awk -F'"' '/extensionIdentifier/ {print $4}' | head -1)
-	[[ $(echo "${app_sso_response}" | grep -c 'accountDisplayName') -gt 0 ]] && psso_display_name=$(echo "${app_sso_response}" | awk -F'"' '/accountDisplayName/ {print $4}' | head -1)
-}
-
 # Check swiftDialog application for validity and version number.
 check_swift_dialog() {
 	swift_dialog_valid="FALSE"
 	local codesign_response
-	codesign_response=$(codesign --verify --verbose "${SWIFT_DIALOG_APP}" 2>&1)
+	codesign_response=$(codesign --verify --verbose "${swift_dialog_app}" 2>&1)
 	if [[ $(echo "${codesign_response}" | grep -c 'valid on disk') -gt 0 ]]; then
 		local version_response
 		version_response=$("${SWIFT_DIALOG_BINARY}" --version)
@@ -227,7 +232,7 @@ get_swift_dialog() {
 	else
 		log_pseudo "Error: Unable to download swiftDialog.pkg:\n${download_response}."
 	fi
-	rm -Rf "${temp_file}" >/dev/null 2>&1
+	rm -Rf "${temp_file}" > /dev/null 2>&1
 	umask "${previous_umask}"
 }
 
@@ -242,51 +247,45 @@ check_current_user() {
 		return 0
 	else # Collect user details.
 		current_user_account_name="${current_user_account_name_response}"
-		current_user_id=$(id -u "${current_user_account_name}" 2>/dev/null)
-		current_user_guid=$(dscl . read "/Users/${current_user_account_name}" GeneratedUID 2>/dev/null | awk '{print $2;}')
-		current_user_real_name=$(dscl . read "/Users/${current_user_account_name}" RealName 2>/dev/null | tail -1 | sed -e 's/^RealName: //g' -e 's/^ //g')
+		current_user_id=$(id -u "${current_user_account_name}" 2> /dev/null)
+		current_user_guid=$(dscl . read "/Users/${current_user_account_name}" GeneratedUID 2> /dev/null | awk '{print $2;}')
+		current_user_real_name=$(dscl . read "/Users/${current_user_account_name}" RealName 2> /dev/null | tail -1 | sed -e 's/^RealName: //g' -e 's/^ //g')
 		# The three following parameters aren't currently used by the pseudo workflow but you never know when they might come in handy in the future.
 		current_user_is_admin="FALSE"
 		current_user_has_secure_token="FALSE"
 		current_user_is_volume_owner="FALSE"
 		if [[ -n "${current_user_id}" ]] && [[ -n "${current_user_guid}" ]] && [[ -n "${current_user_real_name}" ]]; then
-			[[ $(groups "${current_user_account_name}" 2>/dev/null | grep -c 'admin') -gt 0 ]] && current_user_is_admin="TRUE"
-			[[ $(dscl . read "/Users/${current_user_account_name}" AuthenticationAuthority 2>/dev/null | grep -c 'SecureToken') -gt 0 ]] && current_user_has_secure_token="TRUE"
-			[[ $(diskutil apfs listcryptousers / 2>/dev/null | grep -c "${current_user_guid}") -gt 0 ]] && current_user_is_volume_owner="TRUE"
+			[[ $(groups "${current_user_account_name}" 2> /dev/null | grep -c 'admin') -gt 0 ]] && current_user_is_admin="TRUE"
+			[[ $(dscl . read "/Users/${current_user_account_name}" AuthenticationAuthority 2> /dev/null | grep -c 'SecureToken') -gt 0 ]] && current_user_has_secure_token="TRUE"
+			[[ $(diskutil apfs listcryptousers / 2> /dev/null | grep -c "${current_user_guid}") -gt 0 ]] && current_user_is_volume_owner="TRUE"
 		else
 			log_pseudo "Exit: Unable to determine account details for local user ${current_user_account_name} (${current_user_id})" && exit_error
 		fi
 	fi
 }
 
-# Used prior to another command or function that should be run as the user.
-run_as_user() {
-	launchctl asuser "${current_user_id}" sudo -u "${current_user_account_name}" "$@"
-}
-
-# Hide all visible applications.
-hide_all_apps() {
-	osascript <<EOAS
-tell application "Finder"
-	if (count of windows) is not 0 then
-		tell application "Finder" to close every window
-		delay 0.1
-	end if
-end tell
-tell application "System Events"
-	set visibleApps to every process whose visible is true and name is not "Finder"
-	repeat with anApp in visibleApps
-		tell anApp
-			set visible to false
-		end tell
-		delay 0.1
-	end repeat
-end tell
-EOAS
+# Validate installed configuration profiles based on "${CHECK_REQUIRED_CONFIG_PROFILES}" option.
+check_config_profiles() {
+	local check_config_profiles_error
+	check_config_profiles_error="FALSE"
+	local profiles_result
+	profiles_result=$(profiles list -output stdout-xml)
+	local previous_ifs
+	previous_ifs="${IFS}"
+	IFS=','
+	local required_config_profiles_array
+	read -r -a required_config_profiles_array <<<"${CHECK_REQUIRED_CONFIG_PROFILES}"
+	for required_config_profile in "${required_config_profiles_array[@]}"; do
+		[[ $(echo "${profiles_result}" | grep -c "${required_config_profile}") -eq 0 ]] && log_pseudo "Error: No installed confiugration profile matches the following required identifier: ${required_config_profile}" && check_config_profiles_error="TRUE"
+	done
+	IFS="${previous_ifs}"
+	[[ "${check_config_profiles_error}" == TRUE ]] && log_pseudo "Exit: A required configuration profile is not currently installed." && exit_error
 }
 
 # Prepare pseudo by checking for system, Platform SSO config, and user statuses. This function will exit if any prerequisite isn't succesful.
 workflow_startup() {
+	local workflow_startup_error
+	workflow_startup_error="FALSE"
 	# Make sure pseudo is running as root first, otherwise start logging.
 	set_defaults
 	[[ $(id -u) -ne 0 ]] && log_echo "Exit: pseudo must run with root privileges." && exit 1
@@ -294,8 +293,25 @@ workflow_startup() {
 	
 	# Initial system checks.
 	check_system
-	[[ $macos_version_major -lt 14 ]] && log_pseudo "Exit: This computer is running macOS ${macos_version_major} and pseudo requires macOS 15 Sequoia or newer." && exit_error
-	[[ -n "${CHECK_REQUIRED_CONFIG_PROFILES}" ]]  && check_config_profiles
+	[[ $macos_version_major -lt 15 ]] && log_pseudo "Exit: This computer is running macOS ${macos_version_major} and pseudo requires macOS 15 Sequoia or newer." && exit_error
+	
+	# Validate swiftDialog, if missing or invalid then install and check again.
+	killall "dialog" > /dev/null 2>&1
+	killall "Dialog" > /dev/null 2>&1
+		swift_dialog_app=$(command -v /usr/local/bin/dialog 2> /dev/null | sed -e 's/\/Contents.*//')
+	if [[ ! -e "${swift_dialog_app}" ]] || [[ ! -e "${SWIFT_DIALOG_BINARY}" ]]; then
+		get_swift_dialog
+		{ [[ -e "${swift_dialog_app}" ]] && [[ -e "${SWIFT_DIALOG_BINARY}" ]]; } && check_swift_dialog
+		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Exit: Unable to validate swiftDialog after installation."
+	else # swiftDialog is already installed.
+		check_swift_dialog
+		if [[ "${swift_dialog_valid}" == "FALSE" ]]; then
+			get_swift_dialog
+			{ [[ -e "${swift_dialog_app}" ]] && [[ -e "${SWIFT_DIALOG_BINARY}" ]]; } && check_swift_dialog
+		fi
+		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Exit: Unable to validate swiftDialog after re-installation."
+	fi
+	[[ "${swift_dialog_valid}" == "FALSE" ]] && exit_error
 	
 	# Make sure that we have an active local user account.
 	check_current_user
@@ -321,45 +337,40 @@ workflow_startup() {
 	done
 	[[ ${wait_for_dock_timer} -gt 0 ]] && log_pseudo "Status: Waiting for the Dock to open took ${wait_for_dock_timer} seconds to complete."
 	log_pseudo "Status: Current active local user is ${current_user_account_name} (${current_user_id})."
-
-	# Platform SSO configuration checks.
-	check_psso_system_config
-	if [[ "${psso_extension_ID}" == "FALSE" ]]; then
-		log_pseudo "Warning: Could not determine Platform SSO device conifiguration:\n${app_sso_response}"
-		[[ -e "/Applications/Company Portal.app" ]] && psso_extension_ID="com.microsoft.CompanyPortalMac.ssoextension" && log_pseudo "Warning: Found Company Portal.app, assuming Entra ID Platform SSO configuration."
-		[[ -e "/Applications/Okta Verify.app" ]] && psso_extension_ID="com.microsoft.CompanyPortalMac.ssoextension" && log_pseudo "Warning: Found Okta Verify.app, assuming Okta Platform SSO configuration."
-	fi
-	[[ "${psso_extension_ID}" == "FALSE" ]] && log_pseudo "Exit: Could not determine Platform SSO device configuration or find any Platform SSO applications." && exit_error
-	if [[ "${psso_extension_ID}" == "com.microsoft.CompanyPortalMac.ssoextension" ]]; then
-		[[ "${psso_display_name}" != "FALSE" ]] && log_pseudo "Status: Platform SSO configuration for Entra ID with the display name of \"${psso_display_name}\"."
-		[[ ! -e "/Applications/Company Portal.app" ]] && log_pseudo "Exit: The required Platform SSO software Company Portal.app is not installed." && exit_error
-		psso_dialog_icon="/Applications/Company Portal.app/Contents/Resources/AppIcon.icns"
-	fi
-	if [[ "${psso_extension_ID}" == "com.okta.mobile.auth-service-extension" ]]; then
-		[[ "${psso_display_name}" != "FALSE" ]] && log_pseudo "Status: Platform SSO configuration for Okta with the display name of \"${psso_display_name}\"."
-		[[ ! -e "/Applications/Okta Verify.app" ]] && log_pseudo "Exit: The required Platform SSO software Okta Verify.app is not installed." && exit_error
-		psso_dialog_icon="/Applications/Okta Verify.app/Contents/Resources/AppIcon.icns"
-	fi
-	[[ ! -e "${psso_dialog_icon}" ]] && psso_dialog_icon="${DISPLAY_ICON_DEFAULT_FILE}"
 	
-	# Kill any previous swiftDialog instances.
-	killall "dialog" >/dev/null 2>&1
-	killall "Dialog" >/dev/null 2>&1
+	# Configuration profile checks.
+	[[ -n "${CHECK_REQUIRED_CONFIG_PROFILES}" ]] && check_config_profiles
+	if [[ -e "${SSO_MANAGED_PLIST}" ]]; then
+		psso_extension_identifier=$(/usr/libexec/PlistBuddy -c "Print :ExtensionIdentifier" "${SSO_MANAGED_PLIST}" 2> /dev/null)
+		[[ -z "${psso_extension_identifier}" ]] && log_pseudo "Error: Could not determine Platform SSO extension identifier. This is a required value for Platform SSO." && workflow_startup_error="TRUE"
+		psso_login_type=$(/usr/libexec/PlistBuddy -c "Print :PlatformSSO:AuthenticationMethod" "${SSO_MANAGED_PLIST}" 2> /dev/null)
+		[[ -z "${psso_login_type}" ]] && log_pseudo "Error: Could not determine Platform SSO login type. This is a required value for Platform SSO." && workflow_startup_error="TRUE"
+		psso_display_name=$(/usr/libexec/PlistBuddy -c "Print :PlatformSSO:AccountDisplayName" "${SSO_MANAGED_PLIST}" 2> /dev/null)
+		[[ -z "${psso_display_name}" ]] && log_pseudo "Warning: Could not determine Platform SSO account display name. This should be specified for the best user experience."
+	else
+		log_pseudo "Exit: Could not locate the managed configuration for Plaftorm SSO at the expected path: ${SSO_MANAGED_PLIST}" && exit_error
+	fi
 	
-	# Validate swiftDialog, if missing or invalid then install and check again.
-	if [[ ! -e "${SWIFT_DIALOG_APP}" ]] || [[ ! -e "${SWIFT_DIALOG_BINARY}" ]]; then
-		get_swift_dialog
-		{ [[ -e "${SWIFT_DIALOG_APP}" ]] && [[ -e "${SWIFT_DIALOG_BINARY}" ]]; } && check_swift_dialog
-		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Exit: Unable to validate swiftDialog after installation."
-	else # swiftDialog is already installed.
-		check_swift_dialog
-		if [[ "${swift_dialog_valid}" == "FALSE" ]]; then
-			get_swift_dialog
-			{ [[ -e "${SWIFT_DIALOG_APP}" ]] && [[ -e "${SWIFT_DIALOG_BINARY}" ]]; } && check_swift_dialog
+	# Platform SSO extension application checks.
+	if [[ "${psso_extension_identifier}" == "com.microsoft.CompanyPortalMac.ssoextension" ]]; then
+		if [[ -e "/Applications/Company Portal.app" ]]; then
+			psso_dialog_icon="/Applications/Company Portal.app/Contents/Resources/AppIcon.icns"
+			[[ -n "${psso_display_name}" ]] && log_pseudo "Status: Platform SSO configuration for Entra ID using ${psso_login_type} authentication with the display name of \"${psso_display_name}\"."
+			[[ -z "${psso_display_name}" ]] && log_pseudo "Status: Platform SSO configuration for Entra ID using ${psso_login_type} authentication."
+		else
+			log_pseudo "Error: The required Platform SSO software Company Portal.app is not installed." && workflow_startup_error="TRUE"
 		fi
-		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Exit: Unable to validate swiftDialog after re-installation."
 	fi
-	[[ "${swift_dialog_valid}" == "FALSE" ]] && exit_error
+	if [[ "${psso_extension_identifier}" == "com.okta.mobile.auth-service-extension" ]]; then
+		if [[ -e "/Applications/Okta Verify.app" ]]; then
+			psso_dialog_icon="/Applications/Okta Verify.app/Contents/Resources/AppIcon.icns"
+			[[ -n "${psso_display_name}" ]] && log_pseudo "Status: Platform SSO configuration for Okta using ${psso_login_type} authentication with the display name of \"${psso_display_name}\"."
+			[[ -z "${psso_display_name}" ]] && log_pseudo "Status: Platform SSO configuration for Okta using ${psso_login_type} authentication."
+		else
+			log_pseudo "Error: The required Platform SSO software Okta Verify.app is not installed." && workflow_startup_error="TRUE"
+		fi
+	fi
+	[[ "${workflow_startup_error}" == "TRUE" ]] && log_pseudo "Exit: Startup workflow failed." && exit_error
 }
 
 # MARK: *** Jamf Pro Integration ***
@@ -367,6 +378,7 @@ workflow_startup() {
 
 # Update Jamf Pro device compliance and inventory if workflow was successful.
 jamf_pro_update_inventory() {
+	[[ ! -e "${JAMF_PRO_BINARY}" ]] && log_pseudo "Error: Could not locate the Jamf Pro binary in the expected location: ${JAMF_PRO_BINARY}" && update_inventory_error="TRUE"
 	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
 		log_pseudo "Status: Gathering Jamf Pro device compliance information..."
 		local jamf_aad_response
@@ -374,7 +386,7 @@ jamf_pro_update_inventory() {
 		if [[ $(echo "${jamf_aad_response}" | grep -c 'AAD ID acquired') -gt 0 ]]; then
 			log_pseudo "Status: Jamf Pro device compilance information successfully updated."
 		else
-			log_pseudo "Error: Could not gather Jamf Pro device compilance information:\n${jamf_aad_response}"
+			log_pseudo "Error: Could not gather Jamf Pro device compilance information:\n${jamf_aad_response}" && update_inventory_error="TRUE"
 		fi
 	fi
 	if [[ "${touch_id_workflow_active}" == "TRUE" ]] || [[ "${psso_workflow_active}" == "TRUE" ]]; then
@@ -384,7 +396,7 @@ jamf_pro_update_inventory() {
 		if [[ $(echo "${jamf_recon_response}" | grep -c 'Submitting data') -gt 0 ]]; then
 			log_pseudo "Status: Jamf Pro inventory successfully updated."
 		else
-			log_pseudo "Error: Could not update Jamf Pro inventory:\n${jamf_recon_response}"
+			log_pseudo "Error: Could not update Jamf Pro inventory:\n${jamf_recon_response}" && update_inventory_error="TRUE"
 		fi
 	fi
 }
@@ -411,6 +423,7 @@ open_dialog_workspace_one_sync() {
 
 # Update Workspace ONE Intelligent Hub inventory if workflow was successful.
 workspace_one_update_inventory() {
+	[[ ! -e "${WORKSPACE_ONE_BINARY}" ]] && log_pseudo "Error: Could not locate the Workspace ONE binary in the expected location: ${WORKSPACE_ONE_BINARY}" && update_inventory_error="TRUE"
 	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
 		log_pseudo "Status: Syncing device inventory with Workspace ONE Intelligent Hub..."
 		open_dialog_workspace_one_sync
@@ -419,13 +432,11 @@ workspace_one_update_inventory() {
 		if [[ $(echo "${hubcli_response}" | grep -c 'Sync started.') -gt 0 ]]; then
 			log_pseudo "Status: Workspace ONE inventory sync successfully started."
 		else
-			log_pseudo "Warning: Could not start Workspace ONE inventory sync:\n${hubcli_response}"
+			log_pseudo "Error: Could not start Workspace ONE inventory sync:\n${hubcli_response}" && update_inventory_error="TRUE"
 		fi
 		
 		# Update sensors if enabled
-		if [[ "${WORKSPACE_ONE_SENSORS_ENABLED}" == "TRUE" ]] && [[ -n "${WORKSPACE_ONE_SENSORS}" ]]; then
-			workspace_one_update_sensors
-		fi
+		[[ -n "${UPDATE_WORKSPACE_ONE_SENSORS}" ]] && workspace_one_update_sensors
 	fi
 }
 
@@ -433,8 +444,12 @@ workspace_one_update_inventory() {
 workspace_one_update_sensors() {
 	log_pseudo "Status: Updating Workspace ONE sensors..."
 	
-	# Convert space-separated string to array
-	IFS=' ' read -ra sensor_array <<< "${WORKSPACE_ONE_SENSORS}"
+	# Convert comma-separated string to array
+	local previous_ifs
+	previous_ifs="${IFS}"
+	IFS=','
+	local sensor_array
+	read -r -a sensor_array <<< "${UPDATE_WORKSPACE_ONE_SENSORS}"
 	
 	for sensor_name in "${sensor_array[@]}"; do
 		[[ -z "${sensor_name}" ]] && continue  # Skip empty entries
@@ -453,10 +468,11 @@ workspace_one_update_sensors() {
 		fi
 		
 		if [[ "${sensor_success}" == "FALSE" ]]; then
-			log_pseudo "Warning: Workspace ONE sensor update timed out or failed for: ${sensor_name}\n${sensor_response}"
+			log_pseudo "Error: Workspace ONE sensor update timed out or failed for: ${sensor_name}\n${sensor_response}" && update_inventory_error="TRUE"
 		fi
 	done
 	log_pseudo "Status: Workspace ONE sensor updates completed."
+	IFS="${previous_ifs}"
 }
 
 # MARK: *** Touch ID Workflow ***
@@ -660,7 +676,7 @@ workflow_touch_id() {
 		if [[ "${touch_id_workflow_active}" == "FALSE" ]]; then
 			log_pseudo "Status: Starting Touch ID workflow with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
 			if [[ "$(check_touch_id_settings_active)" == "FALSE" ]]; then
-				killall "System Settings" >/dev/null 2>&1
+				killall "System Settings" > /dev/null 2>&1
 				sleep 1
 				log_pseudo "Status: Opening Touch ID System Settings."
 				open_touch_id_system_settings
@@ -681,21 +697,27 @@ workflow_touch_id() {
 	done
 	focus_touch_id_settings
 	open_dialog_touch_id_success
-	killall "System Settings" >/dev/null 2>&1
+	killall "System Settings" > /dev/null 2>&1
 	log_pseudo "Status: Touch ID is now enabled for local user ${current_user_account_name} (${current_user_id}). The workflow took ${touch_id_workflow_timer} seconds to complete."
 }
 
 # MARK: *** Platform SSO Workflow ***
 ################################################################################
 
-# Check to see if the current user is registered for Platform SSO and set "${psso_user_status_dscl}" and "${psso_user_status_login_name}"accordingly.
+# Check to see if the current user is registered for Platform SSO and set "${psso_user_status_dscl}", "${psso_user_status_login_name}", and "${psso_user_status_state} accordingly.
 check_psso_user_status() {
-	psso_user_status_dscl="FALSE"
-	psso_user_status_login_name="FALSE"
-	local app_sso_response
-	app_sso_response=$(run_as_user app-sso platform -s)
-	[[ "$(dscl . read /Users/"${current_user_account_name}" dsAttrTypeStandard:AltSecurityIdentities 2>/dev/null | awk -F'SSO:' '/PlatformSSO/ {print $2}')" ]] && psso_user_status_dscl="TRUE"
-	[[ $(echo "${app_sso_response}" | grep -c 'loginUserName') -gt 0 ]] && psso_user_status_login_name=$(echo "${app_sso_response}" | awk -F'"' '/loginUserName/ {print $4}')
+	local dscl_result
+	dscl_result=$(dscl . read /Users/"${current_user_account_name}" dsAttrTypeStandard:AltSecurityIdentities 2> /dev/null | awk -F'SSO:' '/PlatformSSO/ {print $2}')
+	if [[ -n "${dscl_result}" ]]; then
+		psso_user_status_dscl="${dscl_result}"
+		local app_sso_response
+		app_sso_response=$(run_as_user app-sso platform -s)
+		psso_user_status_login_name=$(echo "${app_sso_response}" | sed -e '1,/User Configuration:/d' | jq -r '.userLoginConfiguration.loginUserName' 2> /dev/null)
+		psso_user_status_state=$(echo "${app_sso_response}" | sed -e '1,/User Configuration:/d' | jq -r '.state' 2> /dev/null)
+	fi
+	[[ -z "${dscl_result}" ]] && psso_user_status_dscl="FALSE"
+	[[ -z "${psso_user_status_login_name}" ]] && psso_user_status_login_name="FALSE"
+	[[ -z "${psso_user_status_state}" ]] && psso_user_status_state="FALSE"
 }
 
 # Pre-enable relevant password AutoFill extensions.
@@ -704,13 +726,13 @@ enable_psso_autofill_extensions() {
 	previous_ifs="${IFS}"
 	IFS=$'\n'
 	local plugin_kit_response
-	[[ "${psso_extension_ID}" == "com.microsoft.CompanyPortalMac.ssoextension" ]] && plugin_kit_response=($(run_as_user pluginkit -m 2>/dev/null | grep 'com.microsoft.CompanyPortalMac'))
-	[[ "${psso_extension_ID}" == "com.okta.mobile.auth-service-extension" ]] && plugin_kit_response=($(run_as_user pluginkit -m 2>/dev/null | grep 'com.okta.mobile'))
+	[[ "${psso_extension_identifier}" == "com.microsoft.CompanyPortalMac.ssoextension" ]] && plugin_kit_response=($(run_as_user pluginkit -m 2> /dev/null | grep 'com.microsoft.CompanyPortalMac'))
+	[[ "${psso_extension_identifier}" == "com.okta.mobile.auth-service-extension" ]] && plugin_kit_response=($(run_as_user pluginkit -m 2> /dev/null | grep 'com.okta.mobile'))
 	for plugin_kit_item in "${plugin_kit_response[@]}"; do
 		[[ $(echo "${plugin_kit_item}" | grep -c '+') -gt 0 ]] && log_pseudo "Status: The AutoFill extension with ID $(echo "${plugin_kit_item}" | awk -F' ' '{print $2}' | sed -e 's/(.*$//') is already enabled."
 		if [[ $(echo "${plugin_kit_item}" | grep -c '+') -eq 0 ]]; then
 			log_pseudo "Status: Enabling AutoFill extension with ID $(echo "${plugin_kit_item}" | awk -F' ' '{print $1}' | sed -e 's/(.*$//')."
-			run_as_user pluginkit -e use -i "$(echo "${plugin_kit_item}" | awk -F' ' '{print $1}' | sed -e 's/(.*$//')" >/dev/null 2>&1
+			run_as_user pluginkit -e use -i "$(echo "${plugin_kit_item}" | awk -F' ' '{print $1}' | sed -e 's/(.*$//')" > /dev/null 2>&1
 		fi
 	done
 	IFS="${previous_ifs}"
@@ -738,22 +760,33 @@ EOAS
 
 # Open the Platform SSO registration window and return "TRUE" or "FALSE".
 open_psso_registration() {
-	killall "AppSSOAgent" >/dev/null 2>&1
-	run_as_user app-sso -l >/dev/null 2>&1
+	killall "AppSSOAgent" > /dev/null 2>&1
+	run_as_user app-sso -l > /dev/null 2>&1
 	sleep 1
 	local open_psso_registration_result
 	open_psso_registration_result=$(osascript <<EOAS
 tell application "System Events"
-	-- Force the Notification Center to appear.
-	tell menu bar item 1 of menu bar 1 of application process "ControlCenter"
-		click
+	-- Loop through the UI elements of the ControlCenter to find the "Clock" menu item to set menuNotificationCenter.
+	tell menu bar 1 of application process "ControlCenter"
+		set menuDescriptionList to description of UI elements
+		repeat with menuItem from 1 to length of menuDescriptionList
+			if item menuItem of menuDescriptionList contains "Clock" then
+				set menuNotificationCenter to menuItem
+				exit repeat
+			end if
+		end repeat
+	end tell
+	-- Open NotificationCenter via menuNotificationCenter.
+	tell menu bar 1 of application process "ControlCenter"
+		tell menu bar item menuNotificationCenter
+			click
+		end tell
 	end tell
 	delay 1
-	-- Collect all the UI elements in Notification Center.
+	-- Loop through the UI elements of NotificationCenter to find the Platform SSO notification to set foundElement and pssoElement.
 	tell application process "NotificationCenter"
 		set allElements to entire contents of window 1
 	end tell
-	-- Loop through the UI elements to find the Platform SSO notification.
 	set foundElement to false
 	repeat with aElement in allElements
 		set aElementStaticTexts to static texts of aElement
@@ -768,21 +801,23 @@ tell application "System Events"
 	end repeat
 	-- Handle success or failure if the Platform SSO notification was found.
 	if foundElement then
-		-- Click on the Platform SSO notification.
+		-- Click on the Platform SSO notification via pssoElement.
 		tell pssoElement
 			click
 		end tell
-		-- Make Notification Center inactive.
 		delay 1
-		tell menu bar item 1 of menu bar 1 of application process "ControlCenter"
-			click
+		-- Close NotificationCenter via menuNotificationCenter.
+		tell menu bar 1 of application process "ControlCenter"
+			tell menu bar item menuNotificationCenter
+				click
+			end tell
 		end tell
-		return "TRUE"
 	else
-		-- Make Notification Center inactive.
-		delay 1
-		tell menu bar item 1 of menu bar 1 of application process "ControlCenter"
-			click
+		-- Close NotificationCenter via menuNotificationCenter.
+		tell menu bar 1 of application process "ControlCenter"
+			tell menu bar item menuNotificationCenter
+				click
+			end tell
 		end tell
 		return "FALSE"
 	end if
@@ -896,8 +931,10 @@ main() {
 	workflow_startup # This function only completes if the system and user are ready to complete further workflows.
 	workflow_touch_id # If Touch ID is available and required then this function only completes if the user has enabled Touch ID.
 	workflow_psso # This function only completes if the user has successfully registred with Platform SSO.
-	[[ -e "${JAMF_PRO_BINARY}" ]] && jamf_pro_update_inventory # This function only updates Jamf Pro inventory if a workflow actually ran.
-	[[ -e "${WORKSPACE_ONE_BINARY}" ]] && workspace_one_update_inventory # This function registers the device with Workspace ONE if a workflow actually ran.
+	update_inventory_error="FALSE"
+	[[ "${UPDATE_JAMF_PRO}" == "TRUE" ]] && jamf_pro_update_inventory # This function only updates Jamf Pro inventory if a workflow actually ran.
+	[[ "${UPDATE_WORKSPACE_ONE}" == "TRUE" ]] && workspace_one_update_inventory # This function only updates Workspace ONE if a workflow actually ran.
+	[[ "${update_inventory_error}" == "TRUE" ]] && log_pseudo "Exit: Unable to complete requested inventory update." && exit_error
 }
 
 main "$@"
