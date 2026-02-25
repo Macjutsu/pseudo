@@ -1,8 +1,8 @@
 # CHANGELOG
 
-## [1.0.0-beta2]
+## [1.0.0-beta3]
 
-2026-02-17
+2026-02-25
 
 ## Highlights (1.0.x)
 
@@ -22,19 +22,34 @@
 - `pseudo` requires a [PPPC configuration profile](https://support.apple.com/guide/deployment/privacy-preferences-policy-control-payload-dep38df53c2a/web) granting specific permissions for the process that starts the `pseudo` script:
 	- Allow sending AppleEvents to com.apple.finder, com.apple.systemuiserver, and com.apple.systemevents.
 	- Allow use of Accessibility.
-- The [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks) contains useful related items including:
+- The [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Sidekicks) contains useful related items including:
 	- Example PPPC configuration profiles.
 	- Management inventory attribute scripts.
 
-### Known Issues (5.x)
+### Known Issues (1.x)
 
 - The `pseudo` workflow has not been thoroughly tested on macOS 15.
 - The `pseudo` workflow has not been thoroughly tested with Okta Platform SSO.
 
+### Specific Changes (1.0.0-beta3)
+
+- New optional `UPDATE_JAMF_PRO` parameter allows you to control the Jamf Pro inventory update workflow. Setting this paramater to any other value besides "TRUE" will disable this option.
+- Updated optional parameter name (to better align with other names)`UPDATE_WORKSPACE_ONE` allows you to control the Workspace ONE inventory update workflow. Setting this paramater to any other value besides "TRUE" will disable this option.
+- Updated optional parameter name and format (to better align with other parameter behavior)`UPDATE_WORKSPACE_ONE_SENSORS` allows you to specify a comma-separated list (previously space-separated) of Workspace ONE sensor names to trigger.
+- Updated [swiftDialog 3.0.0 (out of beta)](https://github.com/swiftDialog/swiftDialog/releases/tag/v3.0.0) is automatically installed. (Thanks to @bartreardon for his dedication to the project!)
+- Improved Notification Center menu selection should be more reliable on non-English (US) systems.
+- Improved swiftDialog validation now derives the application path from the real path of the binary. This is an improvement over the previous static path now that the swiftDialog v3.x application is relocatable.
+- Improved Platform SSO system configuration validation now parses the managed configuration profile (as opposed to using the technically unsupported `app-sso` command).
+- Improved Platform SSO user configuration validation now parses output of the `app-sso` command using `jq` (as opposed to using `grep`).
+- Improved error handling of management service inventory update issues.
+- Various startup workflow optimizations and reorganization.
+- Typo fixes and improvements for dialogs and log output.
+- `pseudo` [1.0.0-beta3 SHA-256: 0f0719c531a1e6749107fca110e1602676610488a41eaa8737d5576eebd73f30](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta3/pseudo.checksum.txt)
+
 ### Specific Changes (1.0.0-beta2)
 
 - New optional `CHECK_REQUIRED_CONFIG_PROFILES` paramater allows you to specify a comma-separated list of configuration profile identifiers that should be installed prior to running the `pseudo` workflow. This fail-safe mechanism prevents the workflow from running if the computer doesn't have all the appropriate configuration profiles required for your Platform SSO implementation.
-- New validation to check if Touch ID hardware is available to the system.  (Shout out to @acodega, @dan-snelson, @alexfinn, and @nonpunctual for their help identifying methods for this!)
+- New validation to check if Touch ID hardware is available to the system. (Shout out to @acodega, @dan-snelson, @alexfinn, and @nonpunctual for their help identifying methods for this!)
 - New optional `TOUCH_ID_CONFIG` parameter allows you to control the Touch ID registration workflow. Setting this parameter to `TOUCH_ID_CONFIG="REQUIRED"` enforces the Touch ID registration workflow, while setting it to `TOUCH_ID_CONFIG="OPTIONAL"` only presents the user with the opportunity to enable Touch ID. Finally, leaving this parameter blank `TOUCH_ID_CONFIG=""`, fully disables the Touch ID workflow. (Thanks to @patgmac for assisting with this new feature!)
 - New Touch ID "introduction" dialogs for both required and optional workflows.
 - New Workspace ONE integration automatically update sensors and computer inventory after the Platform SSO registration has completed. (Thanks to @patgmac for this new feature!)
