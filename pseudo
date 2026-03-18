@@ -8,9 +8,9 @@
 # shellcheck disable=SC2012,SC2024,SC2207
 
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
-PSEUDO_VERSION="1.0.0-beta3"
+PSEUDO_VERSION="1.0.0-beta4"
 readonly PSEUDO_VERSION
-PSEUDO_DATE="2026/02/25"
+PSEUDO_DATE="2026/03/18"
 readonly PSEUDO_DATE
 PSEUDO_USER_AGENT="pseudo/${PSEUDO_VERSION} $(curl --version | head -1 | sed -e 's/curl /curl\//')"
 readonly PSEUDO_USER_AGENT
@@ -28,9 +28,14 @@ set_defaults() {
 	readonly CHECK_REQUIRED_CONFIG_PROFILES
 	
 	# Optionally enable the Touch ID configuration workflow.
-	# The supported values are "REQUIRED" or "OPTIONAL". Any other value, including blank "" , will disable the Touch ID workflow:
-	TOUCH_ID_CONFIG="REQUIRED"
+	# The supported values are "REQUIRED" or "OPTIONAL". Any other value, including blank "", will disable the Touch ID workflow:
+	TOUCH_ID_CONFIG=""
 	readonly TOUCH_ID_CONFIG
+	
+	# Optionally automatically enable Platform SSO related AutoFill extensions.
+	# Any other value besides "TRUE" will disable this option.
+	ENABLE_AUTOFILL_EXTENSIONS=""
+	readonly ENABLE_AUTOFILL_EXTENSIONS
 	
 	# Optionally (after succesfull Platform SSO enrollment) update Jamf Pro device compliance and inventory.
 	# Any other value besides "TRUE" will disable this option.
@@ -73,7 +78,7 @@ set_defaults() {
 	readonly SSO_MANAGED_PLIST
 	
 	# Target version for swiftDialog:
-	SWIFT_DIALOG_TARGET_VERSION="3.0.0.4952"
+	SWIFT_DIALOG_TARGET_VERSION="3.0.0"
 	readonly SWIFT_DIALOG_TARGET_VERSION
 	
 	# URL to the swiftDialog package installer download:
@@ -88,8 +93,8 @@ set_defaults() {
 	SWIFT_DIALOG_COMMAND_FILE="/var/tmp/dialog.log"
 	readonly SWIFT_DIALOG_COMMAND_FILE
 	
-	# Path to the Jamf Pro conditional access binary:
-	JAMF_PRO_AAD_BINARY="/usr/local/jamf/bin/jamfAAD"
+	# Path to the Jamf Conditional Access binary:
+	JAMF_PRO_AAD_BINARY="/Library/Application Support/JAMF/Jamf.app/Contents/MacOS/Jamf Conditional Access.app/Contents/MacOS/Jamf Conditional Access"
 	readonly JAMF_PRO_AAD_BINARY
 	
 	# Path to the Jamf Pro binary:
@@ -119,14 +124,12 @@ interactive_interrupt() {
 
 # Exit the script with no errors.
 exit_success() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
 	log_pseudo "**** P.S.E.U.D.O. ${PSEUDO_VERSION} - ${PSEUDO_DATE} - EXIT SUCCESS ****"
 	exit 0
 }
 
 # Exit the script due to an unrecoverable error.
 exit_error() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
 	log_pseudo "**** P.S.E.U.D.O. ${PSEUDO_VERSION} - ${PSEUDO_DATE} - EXIT ERROR ****"
 	exit 1
 }
@@ -134,27 +137,6 @@ exit_error() {
 # Used prior to another command or function that should be run as the user.
 run_as_user() {
 	launchctl asuser "${current_user_id}" sudo -u "${current_user_account_name}" "$@"
-}
-
-# Hide all visible applications.
-hide_all_apps() {
-	osascript <<EOAS
-tell application "Finder"
-	if (count of windows) is not 0 then
-		tell application "Finder" to close every window
-		delay 0.1
-	end if
-end tell
-tell application "System Events"
-	set visibleApps to every process whose visible is true and name is not "Finder"
-	repeat with anApp in visibleApps
-		tell anApp
-			set visible to false
-		end tell
-		delay 0.1
-	end repeat
-end tell
-EOAS
 }
 
 # Collect parameters for detailed system information and set a variety of parameters.
@@ -191,51 +173,6 @@ check_system() {
 	fi
 }
 
-# Check swiftDialog application for validity and version number.
-check_swift_dialog() {
-	swift_dialog_valid="FALSE"
-	local codesign_response
-	codesign_response=$(codesign --verify --verbose "${swift_dialog_app}" 2>&1)
-	if [[ $(echo "${codesign_response}" | grep -c 'valid on disk') -gt 0 ]]; then
-		local version_response
-		version_response=$("${SWIFT_DIALOG_BINARY}" --version)
-		if [[ "${SWIFT_DIALOG_TARGET_VERSION}" == "${version_response}" ]]; then
-			swift_dialog_valid="TRUE"
-		else
-			log_pseudo "Warning: swiftDialog at path is currently version ${version_response}, this does not match target version ${SWIFT_DIALOG_TARGET_VERSION}."
-		fi
-	else
-		log_pseudo "Warning: unable validate signature for swiftDialog:\n${codesign_response}."
-	fi
-}
-
-# Download and install swiftDialog.
-get_swift_dialog() {
-	log_pseudo "Status: Attempting to download swiftDialog..."
-	local previous_umask
-	previous_umask=$(umask)
-	umask 077
-	local temp_file
-	temp_file="$(mktemp).pkg"
-	local download_response
-	download_response=$(curl --user-agent "${PSEUDO_USER_AGENT}" --connect-timeout "${TIMEOUT_DEFAULT_SECONDS}" --max-time "${TIMEOUT_DEFAULT_SECONDS}" --write-out "Total Time: %{time_total}" --location "${SWIFT_DIALOG_DOWNLOAD_URL}" --output "${temp_file}" 2>&1)
-	if [[ -f "${temp_file}" ]]; then
-		log_pseudo "Status: Successfully downloaded swiftDialog.pkg:\n${download_response}."
-		log_pseudo "Status: Attempting to install swiftDialog..."
-		local install_response
-		install_response=$(installer -verboseR -pkg "${temp_file}" -target / 2>&1)
-		if ! { [[ $(echo "${install_response}" | grep -c 'The software was successfully installed.') -gt 0 ]] || [[ $(echo "${install_response}" | grep -c 'The install was successful.') -gt 0 ]]; }; then
-			log_pseudo "Error: Unable to install swiftDialog.pkg:\n${install_response}"
-		else
-			log_pseudo "Status: Successfully installed swiftDialog.pkg:\n${install_response}."
-		fi
-	else
-		log_pseudo "Error: Unable to download swiftDialog.pkg:\n${download_response}."
-	fi
-	rm -Rf "${temp_file}" > /dev/null 2>&1
-	umask "${previous_umask}"
-}
-
 # Set ${current_user_account_name} to the currently logged in GUI user or "FALSE" if there is none or a system account.
 check_current_user() {
 	current_user_account_name="FALSE"
@@ -259,8 +196,19 @@ check_current_user() {
 			[[ $(dscl . read "/Users/${current_user_account_name}" AuthenticationAuthority 2> /dev/null | grep -c 'SecureToken') -gt 0 ]] && current_user_has_secure_token="TRUE"
 			[[ $(diskutil apfs listcryptousers / 2> /dev/null | grep -c "${current_user_guid}") -gt 0 ]] && current_user_is_volume_owner="TRUE"
 		else
-			log_pseudo "Exit: Unable to determine account details for local user ${current_user_account_name} (${current_user_id})" && exit_error
+			log_pseudo "Error: Unable to determine account details for local user ${current_user_account_name} (${current_user_id})" && workflow_startup_error="TRUE"
 		fi
+	fi
+}
+
+# Evaluate if a process has told the display to not sleep or the user has enabled Focus.
+check_current_user_focus() {
+	local plutil_response
+	plutil_response=$(plutil -extract data.0.storeAssertionRecords.0.assertionDetails.assertionDetailsModeIdentifier raw -o - "/Users/${current_user_account_name}/Library/DoNotDisturb/DB/Assertions.json" 2>&1)
+	if [[ $(echo "${plutil_response}" | grep -c 'permission') -gt 0 ]]; then
+		log_pseudo "Warning: Unable to determine user Focus mode becaucse the process that started pseudo doesn't have Full Disk Access permissions. If the current user has a Focus mode active then the workflow may fail."
+	elif [[ $(echo "${plutil_response}" | grep -c 'com.apple.') -gt 0 ]]; then
+		log_pseudo "Warning: The current user has a Focus mode enabled. This may cause the workflow to fail."
 	fi
 }
 
@@ -279,7 +227,7 @@ check_config_profiles() {
 		[[ $(echo "${profiles_result}" | grep -c "${required_config_profile}") -eq 0 ]] && log_pseudo "Error: No installed confiugration profile matches the following required identifier: ${required_config_profile}" && check_config_profiles_error="TRUE"
 	done
 	IFS="${previous_ifs}"
-	[[ "${check_config_profiles_error}" == TRUE ]] && log_pseudo "Exit: A required configuration profile is not currently installed." && exit_error
+	[[ "${check_config_profiles_error}" == TRUE ]] && log_pseudo "Error: A required configuration profile is not currently installed." && workflow_startup_error="TRUE"
 }
 
 # Prepare pseudo by checking for system, Platform SSO config, and user statuses. This function will exit if any prerequisite isn't succesful.
@@ -298,98 +246,302 @@ workflow_startup() {
 	# Validate swiftDialog, if missing or invalid then install and check again.
 	killall "dialog" > /dev/null 2>&1
 	killall "Dialog" > /dev/null 2>&1
-		swift_dialog_app=$(command -v /usr/local/bin/dialog 2> /dev/null | sed -e 's/\/Contents.*//')
+	swift_dialog_app=$(readlink "${SWIFT_DIALOG_BINARY}" 2> /dev/null | sed -e 's/\/Contents.*//')
 	if [[ ! -e "${swift_dialog_app}" ]] || [[ ! -e "${SWIFT_DIALOG_BINARY}" ]]; then
 		get_swift_dialog
 		{ [[ -e "${swift_dialog_app}" ]] && [[ -e "${SWIFT_DIALOG_BINARY}" ]]; } && check_swift_dialog
-		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Exit: Unable to validate swiftDialog after installation."
+		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Error: Unable to validate swiftDialog after installation."
 	else # swiftDialog is already installed.
 		check_swift_dialog
 		if [[ "${swift_dialog_valid}" == "FALSE" ]]; then
 			get_swift_dialog
 			{ [[ -e "${swift_dialog_app}" ]] && [[ -e "${SWIFT_DIALOG_BINARY}" ]]; } && check_swift_dialog
 		fi
-		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Exit: Unable to validate swiftDialog after re-installation."
+		[[ "${swift_dialog_valid}" == "FALSE" ]] && log_pseudo "Error: Unable to validate swiftDialog after re-installation."
 	fi
-	[[ "${swift_dialog_valid}" == "FALSE" ]] && exit_error
+	[[ "${swift_dialog_valid}" == "FALSE" ]] && workflow_startup_error="TRUE"
 	
 	# Make sure that we have an active local user account.
 	check_current_user
-	local wait_for_user_timer
-	wait_for_user_timer=0
-	while [[ "${current_user_account_name}" == "FALSE" ]]; do
-		[[ $wait_for_user_timer -eq $TIMEOUT_DEFAULT_SECONDS ]] && log_pseudo "Status: Waiting for an active user timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && exit_error
-		[[ $wait_for_user_timer -eq 0 ]] && log_pseudo "Status: Waiting for an active user with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
-		sleep 1
-		check_current_user
-		((wait_for_user_timer++))
-	done
-	[[ ${wait_for_user_timer} -gt 0 ]] && log_pseudo "Status: Waiting for an active user took ${wait_for_user_timer} seconds to complete."
+	if [[ "${workflow_startup_error}" == "FALSE" ]] && [[ "${current_user_account_name}" == "FALSE" ]]; then
+		log_pseudo "Status: Waiting for an active user with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
+		local wait_for_gui_user_start_epoch
+		wait_for_gui_user_start_epoch=$(date +%s)
+		while [[ "${current_user_account_name}" == "FALSE" ]]; do
+			if [[ $(( wait_for_gui_user_start_epoch + TIMEOUT_DEFAULT_SECONDS )) -lt $(date +%s) ]]; then
+				log_pseudo "Error: Waiting for an active user timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_startup_error="TRUE"
+				break
+			fi
+			sleep 1
+			check_current_user
+		done
+		[[ "${current_user_account_name}" != "FALSE" ]] && log_pseudo "Status: Waiting for an active user took $(( $(date +%s) - wait_for_gui_user_start_epoch )) seconds to complete."
+	fi
 	
-	# Wait for Dock to open, this is a good indication the user is fully logged in.
-	local wait_for_dock_timer
-	wait_for_dock_timer=0
-	while ! pgrep -x "Dock" > /dev/null; do
-		[[ $wait_for_dock_timer -eq $TIMEOUT_DEFAULT_SECONDS ]] && log_pseudo "Status: Waiting for the Dock to open timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && exit_error
-		[[ $wait_for_dock_timer -eq 0 ]] && log_pseudo "Status: Waiting for the Dock to open with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
-		sleep 1
-		((wait_for_dock_timer++))
-	done
-	[[ ${wait_for_dock_timer} -gt 0 ]] && log_pseudo "Status: Waiting for the Dock to open took ${wait_for_dock_timer} seconds to complete."
-	log_pseudo "Status: Current active local user is ${current_user_account_name} (${current_user_id})."
+	# Wait for Dock and Finder to open, this is a good indication the user is fully logged in.
+	if [[ "${workflow_startup_error}" == "FALSE" ]] && [[ ! $(pgrep -x "Dock" 2> /dev/null) ]] && [[ ! $(pgrep -x "Finder" 2> /dev/null) ]]; then
+		log_pseudo "Status: Waiting for the Dock and Finder to open with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
+		local wait_for_gui_apps_start_epoch
+		wait_for_gui_apps_start_epoch=$(date +%s)
+		while [[ ! $(pgrep -x "Dock" 2> /dev/null) ]] && [[ ! $(pgrep -x "Finder" 2> /dev/null) ]]; do
+			if [[ $(( wait_for_gui_apps_start_epoch + TIMEOUT_DEFAULT_SECONDS )) -lt $(date +%s) ]]; then
+				log_pseudo "Error: Waiting for the Dock and Finder to open timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_startup_error="TRUE"
+				break
+			fi
+			sleep 1
+		done
+		[[ $(pgrep -x "Dock" 2> /dev/null) ]] && [[ $(pgrep -x "Finder" 2> /dev/null) ]] && log_pseudo "Status: Waiting for the Dock and Finder to open took $(( $(date +%s) - wait_for_gui_user_start_epoch )) seconds to complete."
+	fi
+	if [[ "${current_user_account_name}" != "FALSE" ]]; then
+		log_pseudo "Status: Current active local user is ${current_user_account_name} (${current_user_id})."
+		check_current_user_focus
+	fi
 	
-	# Configuration profile checks.
+	# Configuration checks. This sets ${psso_extension_identifier}, ${psso_login_type}, and ${psso_display_name}.
 	[[ -n "${CHECK_REQUIRED_CONFIG_PROFILES}" ]] && check_config_profiles
 	if [[ -e "${SSO_MANAGED_PLIST}" ]]; then
 		psso_extension_identifier=$(/usr/libexec/PlistBuddy -c "Print :ExtensionIdentifier" "${SSO_MANAGED_PLIST}" 2> /dev/null)
-		[[ -z "${psso_extension_identifier}" ]] && log_pseudo "Error: Could not determine Platform SSO extension identifier. This is a required value for Platform SSO." && workflow_startup_error="TRUE"
 		psso_login_type=$(/usr/libexec/PlistBuddy -c "Print :PlatformSSO:AuthenticationMethod" "${SSO_MANAGED_PLIST}" 2> /dev/null)
-		[[ -z "${psso_login_type}" ]] && log_pseudo "Error: Could not determine Platform SSO login type. This is a required value for Platform SSO." && workflow_startup_error="TRUE"
 		psso_display_name=$(/usr/libexec/PlistBuddy -c "Print :PlatformSSO:AccountDisplayName" "${SSO_MANAGED_PLIST}" 2> /dev/null)
-		[[ -z "${psso_display_name}" ]] && log_pseudo "Warning: Could not determine Platform SSO account display name. This should be specified for the best user experience."
-	else
-		log_pseudo "Exit: Could not locate the managed configuration for Plaftorm SSO at the expected path: ${SSO_MANAGED_PLIST}" && exit_error
+	fi
+	if [[ -z "${psso_extension_identifier}" ]] || [[ -z "${psso_login_type}" ]] || [[ -z "${psso_display_name}" ]]; then
+		log_pseudo "Warning: Could not resolve required Plaftorm SSO attributes from the managed preference located at ${SSO_MANAGED_PLIST}:\n$(/usr/libexec/PlistBuddy -c "Print :" "${SSO_MANAGED_PLIST}" 2> /dev/null)"
+		log_pseudo "Status: Attempting failover configuration validation via app-sso command..."
+		killall "AppSSOAgent" > /dev/null 2>&1
+		sleep 1
+		local app_sso_response
+		app_sso_response=$(app-sso platform -s)
+		[[ -z "${psso_extension_identifier}" ]] && psso_extension_identifier=$(echo "${app_sso_response}" | sed -e '1,/Device Configuration:/d' | jq -r '.extensionIdentifier' 2> /dev/null)
+		[[ -z "${psso_login_type}" ]] && psso_login_type=$(echo "${app_sso_response}" | sed -e '1,/Device Configuration:/d' | jq -r '.loginType' 2> /dev/null)
+		[[ -z "${psso_display_name}" ]] && psso_display_name=$(echo "${app_sso_response}" | sed -e '1,/Device Configuration:/d' | jq -r '.accountDisplayName' 2> /dev/null)
+	fi
+	if [[ -z "${psso_extension_identifier}" ]] || [[ -z "${psso_login_type}" ]] || [[ -z "${psso_display_name}" ]]; then
+		log_pseudo "Warning: Could not resolve required Plaftorm SSO attributes from the app-sso command results:\n${app_sso_response}"
+		[[ -z "${psso_extension_identifier}" ]] && log_pseudo "Error: Could not determine Platform SSO extension identifier. This is a required value for Platform SSO." && workflow_startup_error="TRUE"
+		[[ -z "${psso_login_type}" ]] && log_pseudo "Error: Could not determine Platform SSO login type. This is a required value for Platform SSO." && workflow_startup_error="TRUE"
+		[[ -z "${psso_display_name}" ]] && log_pseudo "Error: Could not determine Platform SSO account display name. This is a required value for the pseudo workflow." && workflow_startup_error="TRUE"
 	fi
 	
-	# Platform SSO extension application checks.
+	# Platform SSO extension application checks. This sets ${psso_dialog_idp_string}, ${psso_login_type_string}, and ${psso_dialog_icon}.
 	if [[ "${psso_extension_identifier}" == "com.microsoft.CompanyPortalMac.ssoextension" ]]; then
 		if [[ -e "/Applications/Company Portal.app" ]]; then
+			psso_dialog_idp_string="Entra ID"
 			psso_dialog_icon="/Applications/Company Portal.app/Contents/Resources/AppIcon.icns"
-			[[ -n "${psso_display_name}" ]] && log_pseudo "Status: Platform SSO configuration for Entra ID using ${psso_login_type} authentication with the display name of \"${psso_display_name}\"."
-			[[ -z "${psso_display_name}" ]] && log_pseudo "Status: Platform SSO configuration for Entra ID using ${psso_login_type} authentication."
 		else
 			log_pseudo "Error: The required Platform SSO software Company Portal.app is not installed." && workflow_startup_error="TRUE"
 		fi
 	fi
 	if [[ "${psso_extension_identifier}" == "com.okta.mobile.auth-service-extension" ]]; then
 		if [[ -e "/Applications/Okta Verify.app" ]]; then
+			psso_dialog_idp_string="Okta"
 			psso_dialog_icon="/Applications/Okta Verify.app/Contents/Resources/AppIcon.icns"
-			[[ -n "${psso_display_name}" ]] && log_pseudo "Status: Platform SSO configuration for Okta using ${psso_login_type} authentication with the display name of \"${psso_display_name}\"."
-			[[ -z "${psso_display_name}" ]] && log_pseudo "Status: Platform SSO configuration for Okta using ${psso_login_type} authentication."
 		else
 			log_pseudo "Error: The required Platform SSO software Okta Verify.app is not installed." && workflow_startup_error="TRUE"
 		fi
 	fi
-	[[ "${workflow_startup_error}" == "TRUE" ]] && log_pseudo "Exit: Startup workflow failed." && exit_error
+	if [[ "${workflow_startup_error}" == "FALSE" ]]; then
+		[[ $(echo "${psso_login_type}" | grep -c 'SecureEnclave') -gt 0 ]] && psso_login_type_string="Secure Enclave"
+		[[ $(echo "${psso_login_type}" | grep -c 'SmartCard') -gt 0 ]] && psso_login_type_string="PIV/SmartCard"
+		[[ $(echo "${psso_login_type}" | grep -c 'Password') -gt 0 ]] && psso_login_type_string="IdP Password"
+		log_pseudo "Status: Platform SSO configuration for ${psso_dialog_idp_string} using ${psso_login_type_string} authentication with the display name \"${psso_display_name}\"."
+	else
+		log_pseudo "Exit: Startup workflow failed due to errors." && exit_error
+	fi
+}
+
+# MARK: *** swiftDialog Integration ***
+################################################################################
+
+# Check swiftDialog application for validity and version number.
+check_swift_dialog() {
+	swift_dialog_valid="FALSE"
+	local codesign_response
+	codesign_response=$(codesign --verify --verbose "${swift_dialog_app}" 2>&1)
+	if [[ $(echo "${codesign_response}" | grep -c 'valid on disk') -gt 0 ]]; then
+		local version_response
+		version_response=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${swift_dialog_app}/Contents/Info.plist" 2> /dev/null)
+		if [[ "${SWIFT_DIALOG_TARGET_VERSION}" == "${version_response}" ]]; then
+			swift_dialog_valid="TRUE"
+		else
+			log_pseudo "Warning: swiftDialog at path is currently version ${version_response}, this does not match target version ${SWIFT_DIALOG_TARGET_VERSION}."
+		fi
+	else
+		log_pseudo "Warning: unable validate signature for swiftDialog:\n${codesign_response}."
+	fi
+}
+
+# Download and install swiftDialog.
+get_swift_dialog() {
+	log_pseudo "Status: Attempting to download swiftDialog..."
+	local previous_umask
+	previous_umask=$(umask)
+	umask 077
+	local temp_dialog_pkg
+	temp_dialog_pkg="$(mktemp).pkg"
+	local download_response
+	download_response=$(curl --user-agent "${PSEUDO_USER_AGENT}" --connect-timeout "${TIMEOUT_DEFAULT_SECONDS}" --max-time "${TIMEOUT_DEFAULT_SECONDS}" --write-out "Total Time: %{time_total}" --location "${SWIFT_DIALOG_DOWNLOAD_URL}" --output "${temp_dialog_pkg}" 2>&1)
+	if [[ -f "${temp_dialog_pkg}" ]]; then
+		log_pseudo "Status: Successfully downloaded swiftDialog.pkg:\n${download_response}."
+		log_pseudo "Status: Attempting to install swiftDialog..."
+		local install_response
+		install_response=$(installer -verboseR -pkg "${temp_dialog_pkg}" -target / 2>&1)
+		if ! { [[ $(echo "${install_response}" | grep -c 'The software was successfully installed.') -gt 0 ]] || [[ $(echo "${install_response}" | grep -c 'The install was successful.') -gt 0 ]]; }; then
+			log_pseudo "Error: Unable to install swiftDialog.pkg:\n${install_response}"
+		else
+			log_pseudo "Status: Successfully installed swiftDialog.pkg:\n${install_response}."
+		fi
+	else
+		log_pseudo "Error: Unable to download swiftDialog.pkg:\n${download_response}."
+	fi
+	rm -Rf "${temp_dialog_pkg}" > /dev/null 2>&1
+	umask "${previous_umask}"
+}
+
+# Hide all other visible applications so only swiftDialog is visible.
+focus_dialog() {
+	osascript > /dev/null 2>&1 <<EOAS
+tell application "Finder"
+	if (count of windows) is not 0 then
+		tell application "Finder" to close every window
+		delay 0.1
+	end if
+end tell
+tell application "System Events"
+	set visibleApps to every process whose visible is true and name is not "Dialog" and name is not "Finder"
+	repeat with anApp in visibleApps
+		tell anApp
+			set visible to false
+		end tell
+		delay 0.1
+	end repeat
+end tell
+if application "Dialog" is running then
+	tell application "System Events"
+		tell application process "Dialog"
+			set frontmost to true
+		end tell
+	end tell
+end if
+EOAS
+}
+
+# Hide all visible applications except for swiftDialog looping every second. This function should be backgrounded and killed when complete.
+focus_dialog_loop() {
+	while true; do
+		focus_dialog
+		sleep 1
+	done
 }
 
 # MARK: *** Jamf Pro Integration ***
 ################################################################################
 
+# Check to see if the Jamf Pro device compliance registration window is open and return its status as "TRUE" or "FALSE".
+check_jamfaad_interface_status() {
+	local psso_jamfaad_active_result
+	psso_jamfaad_active_result=$(osascript 2> /dev/null <<EOAS
+tell application "System Events"
+	if exists process "Jamf Conditional Access" then
+		if exists window 1 of application process "Jamf Conditional Access" then
+			return "TRUE"
+		else
+			return "FALSE"
+		end if
+	else
+		return "FALSE"
+	end if
+end tell
+EOAS
+	)
+	echo "${psso_jamfaad_active_result}"
+}
+
+# Hide all other visible applications so only Jamf Pro device compliance registration is visible.
+focus_jamfaad_registration() {
+	osascript > /dev/null 2>&1 <<EOAS
+tell application "Finder"
+	if (count of windows) is not 0 then
+		tell application "Finder" to close every window
+		delay 0.1
+	end if
+end tell
+tell application "System Events"
+	set visibleApps to every process whose visible is true and name is not "Jamf Conditional Access" and name is not "Dialog" and name is not "Finder"
+	repeat with anApp in visibleApps
+		tell anApp
+			set visible to false
+		end tell
+		delay 0.1
+	end repeat
+	if exists window 1 of application process "Jamf Conditional Access" then
+		tell process "Jamf Conditional Access"
+			set frontmost to true
+		end tell
+	end if
+end tell
+EOAS
+}
+
+# Open a swiftDialog to inform the user that they need to complete the Jamf Pro device compliance registration.
+open_dialog_jamfaad_active() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: jamfAAD Active"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Platform SSO Registration" \
+	--message "**Please select your account credentials to complete the Jamf Conditional Access registration.**" \
+	--icon "${psso_dialog_icon}" \
+	--mini \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text none \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop &
+	disown $!
+}
+
 # Update Jamf Pro device compliance and inventory if workflow was successful.
 jamf_pro_update_inventory() {
-	[[ ! -e "${JAMF_PRO_BINARY}" ]] && log_pseudo "Error: Could not locate the Jamf Pro binary in the expected location: ${JAMF_PRO_BINARY}" && update_inventory_error="TRUE"
-	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
-		log_pseudo "Status: Gathering Jamf Pro device compliance information..."
-		local jamf_aad_response
-		jamf_aad_response=$(run_as_user "${JAMF_PRO_AAD_BINARY}" gatherAADInfo 2>&1)
-		if [[ $(echo "${jamf_aad_response}" | grep -c 'AAD ID acquired') -gt 0 ]]; then
-			log_pseudo "Status: Jamf Pro device compilance information successfully updated."
-		else
-			log_pseudo "Error: Could not gather Jamf Pro device compilance information:\n${jamf_aad_response}" && update_inventory_error="TRUE"
+	update_inventory_error="FALSE"
+	if [[ -e "${JAMF_PRO_AAD_BINARY}" ]]; then
+		log_pseudo "Status: Updating Jamf Pro device compliance..."
+		local psso_jamfaad_end_epoch
+		local temp_jamfaad_response
+		temp_jamfaad_response="$(mktemp).log"
+		run_as_user "${JAMF_PRO_AAD_BINARY}" gatherAADInfo > "${temp_jamfaad_response}" 2>&1 &
+		sleep 1
+		if [[ "$(check_jamfaad_interface_status)" == "TRUE" ]]; then
+			log_pseudo "Status: Waiting for user interactive Jamf Pro device compliance registration with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
+			open_dialog_jamfaad_active
+			psso_jamfaad_end_epoch=$(date +%s)
+			while [[ "$(check_jamfaad_interface_status)" == "TRUE" ]]; do
+				if [[ $(( psso_jamfaad_end_epoch + TIMEOUT_DEFAULT_SECONDS )) -lt $(date +%s) ]]; then
+					log_pseudo "Error: User interactive Jamf Pro device compliance registration timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && update_inventory_error="TRUE"
+					break
+				fi
+				focus_jamfaad_registration
+				sleep 1
+			done
+			if [[ "${update_inventory_error}" == "FALSE" ]]; then
+				log_pseudo "Status: User interactive Jamf Pro device compliance registration took $(( $(date +%s) - psso_jamfaad_end_epoch )) seconds to complete."
+			else
+				killall "Jamf Conditional Access" > /dev/null 2>&1
+			fi
 		fi
+		if [[ "$(check_jamfaad_interface_status)" == "FALSE" ]] && [[ "${update_inventory_error}" == "FALSE" ]]; then
+			if [[ $(cat "${temp_jamfaad_response}" | grep -c 'AAD ID acquired') -gt 0 ]] && [[ $(cat "${temp_jamfaad_response}" | grep -c "${current_user_account_name}") -gt 0 ]]; then
+				log_pseudo "Status: Jamf Pro device compliance appears to be registered for user ${current_user_account_name}."
+			else
+				log_pseudo "Error: Unexpected Jamf Pro device compliance verification result:\n$(cat "${temp_jamfaad_response}")" && update_inventory_error="TRUE"
+			fi
+		else
+			log_pseudo "Error: Could not validate Jamf Pro device compliance registration." && update_inventory_error="TRUE"
+		fi
+		rm -Rf "${temp_jamfaad_response}" > /dev/null 2>&1
+	else
+		log_pseudo "Warning: Could not locate Jamf Conditional Access binary in the expected location."
 	fi
-	if [[ "${touch_id_workflow_active}" == "TRUE" ]] || [[ "${psso_workflow_active}" == "TRUE" ]]; then
+	[[ "${psso_workflow_main_active}" == "TRUE" ]] && open_dialog_psso_success & disown
+	if [[ -e "${JAMF_PRO_BINARY}" ]]; then
 		log_pseudo "Status: Updating Jamf Pro inventory..."
 		local jamf_recon_response
 		jamf_recon_response=$("${JAMF_PRO_BINARY}" recon -verbose 2>&1)
@@ -398,6 +550,8 @@ jamf_pro_update_inventory() {
 		else
 			log_pseudo "Error: Could not update Jamf Pro inventory:\n${jamf_recon_response}" && update_inventory_error="TRUE"
 		fi
+	else
+		log_pseudo "Error: Could not locate the Jamf Pro binary in the expected location." && update_inventory_error="TRUE"
 	fi
 }
 
@@ -406,8 +560,7 @@ jamf_pro_update_inventory() {
 
 # Open a dialog to inform the user about Workspace ONE registration.
 open_dialog_workspace_one_sync() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
-	sleep 0.1
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Device Registration" \
 	--message "A Workspace ONE Intelligent Hub window will now appear.  \n  \nPlease select your account from the list and click \"Continue\"." \
@@ -418,26 +571,6 @@ open_dialog_workspace_one_sync() {
 	--quitkey p \
 	--hidedefaultkeyboardaction \
 	--ontop
-	sleep 0.1
-}
-
-# Update Workspace ONE Intelligent Hub inventory if workflow was successful.
-workspace_one_update_inventory() {
-	[[ ! -e "${WORKSPACE_ONE_BINARY}" ]] && log_pseudo "Error: Could not locate the Workspace ONE binary in the expected location: ${WORKSPACE_ONE_BINARY}" && update_inventory_error="TRUE"
-	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
-		log_pseudo "Status: Syncing device inventory with Workspace ONE Intelligent Hub..."
-		open_dialog_workspace_one_sync
-		local hubcli_response
-		hubcli_response=$("${WORKSPACE_ONE_BINARY}" sync 2>&1)
-		if [[ $(echo "${hubcli_response}" | grep -c 'Sync started.') -gt 0 ]]; then
-			log_pseudo "Status: Workspace ONE inventory sync successfully started."
-		else
-			log_pseudo "Error: Could not start Workspace ONE inventory sync:\n${hubcli_response}" && update_inventory_error="TRUE"
-		fi
-		
-		# Update sensors if enabled
-		[[ -n "${UPDATE_WORKSPACE_ONE_SENSORS}" ]] && workspace_one_update_sensors
-	fi
 }
 
 # Update Workspace ONE sensors after Platform SSO enrollment.
@@ -475,25 +608,50 @@ workspace_one_update_sensors() {
 	IFS="${previous_ifs}"
 }
 
+# Update Workspace ONE Intelligent Hub inventory if workflow was successful.
+workspace_one_update_inventory() {
+	update_inventory_error="FALSE"
+	[[ ! -e "${WORKSPACE_ONE_BINARY}" ]] && log_pseudo "Error: Could not locate the Workspace ONE binary in the expected location: ${WORKSPACE_ONE_BINARY}" && update_inventory_error="TRUE"
+	log_pseudo "Status: Syncing device inventory with Workspace ONE Intelligent Hub..."
+	open_dialog_workspace_one_sync
+	local hubcli_response
+	hubcli_response=$("${WORKSPACE_ONE_BINARY}" sync 2>&1)
+	if [[ $(echo "${hubcli_response}" | grep -c 'Sync started.') -gt 0 ]]; then
+		log_pseudo "Status: Workspace ONE inventory sync successfully started."
+	else
+		log_pseudo "Error: Could not start Workspace ONE inventory sync:\n${hubcli_response}" && update_inventory_error="TRUE"
+	fi
+	
+	# Update sensors if enabled
+	[[ -n "${UPDATE_WORKSPACE_ONE_SENSORS}" ]] && workspace_one_update_sensors
+}
+
 # MARK: *** Touch ID Workflow ***
 ################################################################################
 
-# Check to see if the current user has Touch ID enabled and set "${touch_id_user_status}" accordingly.
+# Check to see if the current user has Touch ID enabled and return its status as "TRUE" or "FALSE".
 check_touch_id_user_status() {
-	touch_id_user_status="FALSE"
 	local bioutil_user_ids
 	bioutil_user_ids=($(bioutil -c -s | awk '/User/ {print $2 $3}'))
-	[[ $(echo "${bioutil_user_ids[*]}" | grep -c "${current_user_id}") -gt 0 ]] && touch_id_user_status="TRUE"
+	if [[ $(echo "${bioutil_user_ids[*]}" | grep -c "${current_user_id}") -gt 0 ]]; then
+		echo "TRUE"
+	else
+		echo "FALSE"
+	fi
 }
 
-# Check to see if the Touch ID System Settings window is open and return "TRUE" or "FALSE".
-check_touch_id_settings_active() {
-	local touch_id_settings_active_result
-	touch_id_settings_active_result=$(osascript <<EOAS
+# Check the status of the Touch ID System Settings window and return its status as "OPEN", "ACTIVE", or "FALSE".
+check_touch_id_settings_status() {
+	local touch_id_settings_status_result
+	touch_id_settings_status_result=$(osascript 2> /dev/null <<EOAS
 if application "System Settings" is running then
-	tell application "System Settings"
-		if (exists window "Touch ID & Password") then
-			return "TRUE"
+	tell application "System Events"
+		if title of window 1 of process "System Settings" contains "Touch ID" then
+			if exists sheet 1 of window 1 of process "System Settings" then
+				return "ACTIVE"
+			else
+				return "OPEN"
+			end if
 		else
 			return "FALSE"
 		end if
@@ -503,29 +661,7 @@ else
 end if
 EOAS
 	)
-	echo "${touch_id_settings_active_result}"
-}
-
-# Check to see if the Touch ID System Settings fingerprint sheet is open and return "TRUE" or "FALSE".
-check_touch_id_fingerprint_sheet_active() {
-	local touch_id_fingerprint_sheet_active_result
-	touch_id_fingerprint_sheet_active_result=$(osascript <<EOAS
-if application "System Settings" is running then
-	tell application "System Events"
-		tell process "System Settings"
-			if (exists sheet 1 of window "Touch ID & Password") then
-				return "TRUE"
-			else
-				return "FALSE"
-			end if
-		end tell
-	end tell
-else
-	return "FALSE"
-end if
-EOAS
-	)
-	echo "${touch_id_fingerprint_sheet_active_result}"
+	echo "${touch_id_settings_status_result}"
 }
 
 # Open the Touch ID System Settings window.
@@ -535,7 +671,7 @@ open_touch_id_system_settings() {
 
 # Hide all other visible applications so only the Touch ID System Settings is visible.
 focus_touch_id_settings() {
-	osascript <<EOAS
+	osascript > /dev/null 2>&1 <<EOAS
 tell application "Finder"
 	if (count of windows) is not 0 then
 		tell application "Finder" to close every window
@@ -557,15 +693,18 @@ end tell
 EOAS
 }
 
-# Open an interactive swiftDialog informing the user that they are required to enable Touch ID.
+# Open an interactive swiftDialog informing the user that they are required to enable Touch ID and set ${dialog_touch_id_result}.
 open_dialog_touch_id_required() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
-	sleep 0.1
-	hide_all_apps
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	focus_dialog_loop &
+	local focus_dialog_loop_pid
+	focus_dialog_loop_pid=$!
+	disown $focus_dialog_loop_pid
+	log_pseudo "Dialog Open: Touch ID Setup Required"
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Touch ID Setup Required" \
 	--message "**Touch ID is required for all Mac computers at ${DISPLAY_ORGANIZATION_NAME}.**<br><br>Touch ID provides enhanced security and convenience by allowing you to authenticate using the Mac computer's fingerprint sensor." \
-	--icon "SF=touchid,colour=auto" \
+	--icon "SF=touchid,palette=primary,accent,none" \
 	--small \
 	--position "${DISPLAY_DIALOG_POSITION}" \
 	--timer "${TIMEOUT_DEFAULT_SECONDS}" \
@@ -574,18 +713,23 @@ open_dialog_touch_id_required() {
 	--quitkey p \
 	--hidedefaultkeyboardaction \
 	--ontop
-	return $?
+	dialog_touch_id_result=$?
+	log_pseudo "Dialog Closed: Touch ID Setup Required"
+	kill -9 "${focus_dialog_loop_pid}" >/dev/null 2>&1
 }
 
-# Open an interactive swiftDialog asking the user if they want to enable Touch ID.
+# Open an interactive swiftDialog asking the user if they want to enable Touch ID and set ${dialog_touch_id_result}.
 open_dialog_touch_id_optional() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
-	sleep 0.1
-	hide_all_apps
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	focus_dialog_loop &
+	local focus_dialog_loop_pid
+	focus_dialog_loop_pid=$!
+	disown $focus_dialog_loop_pid
+	log_pseudo "Dialog Open: Touch ID Setup Optional"
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Touch ID Setup" \
 	--message "**Please take a few moments to enable Touch ID.**<br><br>Touch ID provides enhanced security and convenience by allowing you to authenticate using the Mac computer's fingerprint sensor." \
-	--icon "SF=touchid,colour=auto" \
+	--icon "SF=touchid,palette=primary,accent,none" \
 	--small \
 	--position "${DISPLAY_DIALOG_POSITION}" \
 	--timer "${TIMEOUT_DEFAULT_SECONDS}" \
@@ -595,129 +739,176 @@ open_dialog_touch_id_optional() {
 	--quitkey p \
 	--hidedefaultkeyboardaction \
 	--ontop
-	return $?
+	dialog_touch_id_result=$?
+	log_pseudo "Dialog Closed: Touch ID Setup Optional"
+	kill -9 "${focus_dialog_loop_pid}" >/dev/null 2>&1
 }
 
 # Open a swiftDialog to assist while the user enables Touch ID.
 open_dialog_touch_id_start() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
-	sleep 0.1
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Touch ID Start"
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Touch ID Setup" \
-	--message "Enable Touch ID by adding at least one fingerprint in the Touch ID settings." \
-	--icon "SF=touchid,colour=auto" \
+	--message "**Enable Touch ID by adding at least one fingerprint in the Touch ID settings.**" \
+	--icon "SF=touchid,palette=primary,accent,none" \
 	--mini \
 	--position "${DISPLAY_DIALOG_POSITION}" \
+	--timer "${TIMEOUT_DEFAULT_SECONDS}" \
+	--hidetimerbar \
 	--button1text none \
 	--quitkey p \
 	--hidedefaultkeyboardaction \
 	--ontop &
-	sleep 0.1
 	disown $!
 }
 
 # Open a swiftDialog to inform the user that Touch ID is enabled.
 open_dialog_touch_id_success() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
-	sleep 0.1
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Touch ID Success"
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Touch ID Enabled" \
-	--message "Thank you for enabling Touch ID! You can register additional fingerprints or click \"OK\" to close the Touch ID settings." \
-	--icon "SF=touchid,colour=auto" \
-	--mini \
+	--message "**Thank you for enabling Touch ID!**<br><br>You can now authenticate on this Mac using your fingerprint. You can register additional fingerprints or click \"OK\" to close the Touch ID settings." \
+	--icon "SF=touchid,palette=primary,accent,none" \
+	--small \
 	--position "${DISPLAY_DIALOG_POSITION}" \
+	--timer "${TIMEOUT_DEFAULT_SECONDS}" \
+	--hidetimerbar \
 	--button1text "OK" \
 	--quitkey p \
 	--hidedefaultkeyboardaction \
 	--ontop
-	sleep 0.1
+	return $?
+}
+
+# Open an interactive swiftDialog informing the user that the Touch ID workflow has failed.
+open_dialog_touch_id_failed() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	focus_dialog
+	log_pseudo "Dialog Open: Touch ID Failed"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Touch ID Setup Failed" \
+	--message "**Touch ID setup has failed.**<br><br>Please contact your administrator if this issue persists." \
+	--icon caution \
+	--overlayicon "SF=touchid,palette=primary,accent,none" \
+	--small \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text "OK" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop &
+	disown $!
 }
 
 # The full workflow to check Touch ID status and if required open interfaces and dialogs to enable Touch ID.
 workflow_touch_id() {
+	local workflow_touch_id_error
+	workflow_touch_id_error="FALSE"
+	touch_id_workflow_active="FALSE"
+	
 	# If Touch ID is already enabled then skip the workflow
-	[[ "${touch_id_hardware_status}" != "FALSE" ]] && check_touch_id_user_status
-	if [[ "${touch_id_hardware_status}" != "FALSE" ]] && [[ "${touch_id_user_status}" == "TRUE" ]]; then
-		log_pseudo "Status: Touch ID is already enabled for local user ${current_user_account_name} (${current_user_id})."
-		return 0
+	if [[ "${touch_id_hardware_status}" != "FALSE" ]]; then
+		local touch_id_user_status
+		touch_id_user_status=$(check_touch_id_user_status)
+		[[ "${touch_id_user_status}" == "TRUE" ]] && log_pseudo "Status: Touch ID is already enabled for local user ${current_user_account_name} (${current_user_id})." && return 0
 	fi
 	
-	# Handle the ${TOUCH_ID_CONFIG} option.
-	local dialog_touch_id_result
+	# Given the ${TOUCH_ID_CONFIG} option, handle the initial Touch ID registration dialog.
 	if [[ "${TOUCH_ID_CONFIG}" == "REQUIRED" ]]; then
 		[[ "${touch_id_hardware_status}" == "FALSE" ]] && log_pseudo "Warning: Can't enforce Touch ID enablement because this computer does not have access to Touch ID hardware." && return 0
 		log_pseudo "Status: Informing user that Touch ID is required and will be configured for local user ${current_user_account_name} (${current_user_id})."
 		open_dialog_touch_id_required
-		dialog_touch_id_result=$?
 	elif [[ "${TOUCH_ID_CONFIG}" == "OPTIONAL" ]]; then
 		[[ "${touch_id_hardware_status}" == "FALSE" ]] && log_pseudo "Warning: Can't ask user to enable Touch ID because this computer does not have access to Touch ID hardware." && return 0
 		log_pseudo "Status: Asking local user ${current_user_account_name} (${current_user_id}) if they want to enable optional Touch ID."
 		open_dialog_touch_id_optional
-		dialog_touch_id_result=$?
 	else
 		log_pseudo "Status: Touch ID workflow is disabled."
 		return 0
 	fi
-	
-	# Handle the results of swiftDialog ${dialog_touch_id_result}.
 	if [[ "${dialog_touch_id_result}" -eq 2 ]]; then
 		log_pseudo "Status: The user chose to skip the optional Touch ID enablement." && return 0
 	elif [[ "${dialog_touch_id_result}" -eq 4 ]]; then
-		log_pseudo "Error: The initial Touch ID user dialog timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && exit_error
+		log_pseudo "Error: The initial Touch ID dialog timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_touch_id_error="TRUE"
 	elif [[ "${dialog_touch_id_result}" -gt 0 ]]; then
-		log_pseudo "Error: The initial Touch ID user dialog returned unexpected result: ${dialog_touch_id_result}" && exit_error
+		log_pseudo "Error: The initial Touch ID dialog returned unexpected result: ${dialog_touch_id_result}" && workflow_touch_id_error="TRUE"
 	fi
 	
 	# At this point it's time to open the Touch ID system settings.
-	touch_id_workflow_timer=0
-	touch_id_workflow_active="FALSE"
-	while [[ "${touch_id_user_status}" == "FALSE" ]] || { [[ "${touch_id_user_status}" == "TRUE" ]] && [[ "$(check_touch_id_fingerprint_sheet_active)" == "TRUE" ]]; }; do
-		[[ $touch_id_workflow_timer -eq $TIMEOUT_DEFAULT_SECONDS ]] && log_pseudo "Exit: Touch ID workflow timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && exit_error
-		if [[ "${touch_id_workflow_active}" == "FALSE" ]]; then
-			log_pseudo "Status: Starting Touch ID workflow with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
-			if [[ "$(check_touch_id_settings_active)" == "FALSE" ]]; then
-				killall "System Settings" > /dev/null 2>&1
-				sleep 1
-				log_pseudo "Status: Opening Touch ID System Settings."
-				open_touch_id_system_settings
-			else
-				log_pseudo "Status: Touch ID System Settings is already open."
-			fi
-			open_dialog_touch_id_start
-			touch_id_workflow_active="TRUE"
-		fi
-		if [[ "$(check_touch_id_settings_active)" == "FALSE" ]]; then
-			log_pseudo "Status: Re-opening Touch ID System Settings (the user likely closed System Settings)."
+	if [[ "${workflow_touch_id_error}" == "FALSE" ]] && [[ "${touch_id_user_status}" == "FALSE" ]]; then
+		log_pseudo "Status: Starting Touch ID workflow with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
+		touch_id_workflow_active="TRUE"
+		local touch_id_settings_status
+		touch_id_settings_status=$(check_touch_id_settings_status)
+		if [[ "${touch_id_settings_status}" != "OPEN" ]] && [[ "${touch_id_settings_status}" != "ACTIVE" ]]; then
+			log_pseudo "Status: Opening Touch ID System Settings."
 			open_touch_id_system_settings
+		else
+			log_pseudo "Status: Touch ID System Settings is already open."
 		fi
+		open_dialog_touch_id_start
+		local touch_id_workflow_start_epoch
+		touch_id_workflow_start_epoch=$(date +%s)
+		while [[ "${touch_id_user_status}" == "FALSE" ]] || { [[ "${touch_id_user_status}" == "TRUE" ]] && [[ "${touch_id_settings_status}" == "ACTIVE" ]]; }; do
+			if [[ $(( touch_id_workflow_start_epoch + TIMEOUT_DEFAULT_SECONDS )) -lt $(date +%s) ]]; then
+				log_pseudo "Error: Touch ID workflow timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_touch_id_error="TRUE"
+				break
+			fi
+			touch_id_settings_status=$(check_touch_id_settings_status)
+			if [[ "${touch_id_settings_status}" == "FALSE" ]]; then
+				log_pseudo "Status: Re-opening Touch ID System Settings (the user likely closed System Settings)."
+				open_touch_id_system_settings
+			fi
+			focus_touch_id_settings
+			sleep 1
+			touch_id_user_status=$(check_touch_id_user_status)
+		done
+	fi
+	
+	# Touch ID has been enabled, ask if the user wants to enable another fingerprint.
+	if [[ "${workflow_touch_id_error}" == "FALSE" ]] && [[ "${touch_id_user_status}" == "TRUE" ]]; then
 		focus_touch_id_settings
-		sleep 1
-		check_touch_id_user_status
-		((touch_id_workflow_timer++))
-	done
-	focus_touch_id_settings
-	open_dialog_touch_id_success
+		open_dialog_touch_id_success
+		dialog_touch_id_result=$?
+		if [[ "${dialog_touch_id_result}" -eq 4 ]]; then
+			log_pseudo "Error: The initial Touch ID dialog timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_touch_id_error="TRUE"
+		elif [[ "${dialog_touch_id_result}" -gt 0 ]]; then
+			log_pseudo "Error: The initial Touch ID dialog returned unexpected result: ${dialog_touch_id_result}" && workflow_touch_id_error="TRUE"
+		fi
+	fi
+	
+	# If there are any Touch ID workflow errors then present a failure dialog and exit.
 	killall "System Settings" > /dev/null 2>&1
-	log_pseudo "Status: Touch ID is now enabled for local user ${current_user_account_name} (${current_user_id}). The workflow took ${touch_id_workflow_timer} seconds to complete."
+	if [[ "${workflow_touch_id_error}" == "FALSE" ]]; then
+		log_pseudo "Status: Touch ID is now enabled for local user ${current_user_account_name} (${current_user_id}). The Touch ID workflow took $(( $(date +%s) - touch_id_workflow_start_epoch )) seconds to complete."
+	else
+		[[ "${touch_id_workflow_active}" == "TRUE" ]] && open_dialog_touch_id_failed & disown
+		log_pseudo "Exit: Touch ID workflow failed due to errors." && exit_error
+	fi
 }
 
 # MARK: *** Platform SSO Workflow ***
 ################################################################################
 
-# Check to see if the current user is registered for Platform SSO and set "${psso_user_status_dscl}", "${psso_user_status_login_name}", and "${psso_user_status_state} accordingly.
+# Check to see if the current user is registered for Platform SSO and set ${psso_user_status_dscl}, ${psso_user_status_login_name}, ${psso_user_status_login_type}, "${psso_user_status_state}, and ${psso_user_status_smartcard_token_id} accordingly.
 check_psso_user_status() {
 	local dscl_result
 	dscl_result=$(dscl . read /Users/"${current_user_account_name}" dsAttrTypeStandard:AltSecurityIdentities 2> /dev/null | awk -F'SSO:' '/PlatformSSO/ {print $2}')
 	if [[ -n "${dscl_result}" ]]; then
 		psso_user_status_dscl="${dscl_result}"
 		local app_sso_response
-		app_sso_response=$(run_as_user app-sso platform -s)
-		psso_user_status_login_name=$(echo "${app_sso_response}" | sed -e '1,/User Configuration:/d' | jq -r '.userLoginConfiguration.loginUserName' 2> /dev/null)
-		psso_user_status_state=$(echo "${app_sso_response}" | sed -e '1,/User Configuration:/d' | jq -r '.state' 2> /dev/null)
+		app_sso_response=$(run_as_user app-sso platform -s | sed -e '1,/User Configuration:/d')
+		psso_user_status_login_name=$(echo "${app_sso_response}" | jq -r '.userLoginConfiguration.loginUserName' 2> /dev/null)
+		psso_user_status_login_type=$(echo "${app_sso_response}" | jq -r '.loginType' 2> /dev/null)
+		psso_user_status_state=$(echo "${app_sso_response}" | jq -r '.state' 2> /dev/null)
+		[[ $(echo "${psso_login_type}" | grep -c 'SmartCard') -gt 0 ]] && psso_user_status_smartcard_token_id=$(echo "${app_sso_response}" | jq -r '.smartCardTokenId' 2> /dev/null)
 	fi
 	[[ -z "${dscl_result}" ]] && psso_user_status_dscl="FALSE"
 	[[ -z "${psso_user_status_login_name}" ]] && psso_user_status_login_name="FALSE"
+	[[ -z "${psso_user_status_login_type}" ]] && psso_user_status_login_type="FALSE"
 	[[ -z "${psso_user_status_state}" ]] && psso_user_status_state="FALSE"
+	[[ -z "${psso_user_status_smartcard_token_id}" ]] && psso_user_status_smartcard_token_id="FALSE"
 }
 
 # Pre-enable relevant password AutoFill extensions.
@@ -729,8 +920,11 @@ enable_psso_autofill_extensions() {
 	[[ "${psso_extension_identifier}" == "com.microsoft.CompanyPortalMac.ssoextension" ]] && plugin_kit_response=($(run_as_user pluginkit -m 2> /dev/null | grep 'com.microsoft.CompanyPortalMac'))
 	[[ "${psso_extension_identifier}" == "com.okta.mobile.auth-service-extension" ]] && plugin_kit_response=($(run_as_user pluginkit -m 2> /dev/null | grep 'com.okta.mobile'))
 	for plugin_kit_item in "${plugin_kit_response[@]}"; do
-		[[ $(echo "${plugin_kit_item}" | grep -c '+') -gt 0 ]] && log_pseudo "Status: The AutoFill extension with ID $(echo "${plugin_kit_item}" | awk -F' ' '{print $2}' | sed -e 's/(.*$//') is already enabled."
-		if [[ $(echo "${plugin_kit_item}" | grep -c '+') -eq 0 ]]; then
+		[[ $(echo "${plugin_kit_item}" | grep -c -e '\+    ') -gt 0 ]] && log_pseudo "Status: The AutoFill extension with ID $(echo "${plugin_kit_item}" | awk -F' ' '{print $2}' | sed -e 's/(.*$//') is already enabled."
+		if [[ $(echo "${plugin_kit_item}" | grep -c -e '-    ') -gt 0 ]]; then
+			log_pseudo "Status: Re-enabling AutoFill extension with ID $(echo "${plugin_kit_item}" | awk -F' ' '{print $2}' | sed -e 's/(.*$//')."
+			run_as_user pluginkit -e use -i "$(echo "${plugin_kit_item}" | awk -F' ' '{print $2}' | sed -e 's/(.*$//')" > /dev/null 2>&1
+		elif [[ $(echo "${plugin_kit_item}" | grep -c -e '\+    ') -eq 0 ]]; then
 			log_pseudo "Status: Enabling AutoFill extension with ID $(echo "${plugin_kit_item}" | awk -F' ' '{print $1}' | sed -e 's/(.*$//')."
 			run_as_user pluginkit -e use -i "$(echo "${plugin_kit_item}" | awk -F' ' '{print $1}' | sed -e 's/(.*$//')" > /dev/null 2>&1
 		fi
@@ -738,13 +932,52 @@ enable_psso_autofill_extensions() {
 	IFS="${previous_ifs}"
 }
 
-# Check to see if the Platform SSO registration window is open and return "TRUE" or "FALSE".
-check_psso_registration_active() {
-	local psso_registration_active_result
-	psso_registration_active_result=$(osascript <<EOAS
+# Check the status of Platform SSO registration dialog and return its status as "OPEN", "ACTIVE", "AUTOFILL", "CLOSE", or "FALSE".
+check_psso_registration_status() {
+	local psso_registration_status_result
+	psso_registration_status_result=$(osascript 2> /dev/null <<EOAS
+if application "AppSSOAgent" is running then
+	tell application "System Events"
+		set windowCount to count of every window of application process "AppSSOAgent"
+		if windowCount is greater than 1 then
+			repeat with i from 1 to windowCount
+				set allElements to entire contents of window i of application process "AppSSOAgent"
+				repeat with aElement in allElements
+					if name of aElement contains "autofill" then
+						return "AUTOFILL"
+					end if
+				end repeat
+			end repeat
+			return "ACTIVE"
+		else if windowCount is equal to 1 then
+			if (count of every sheet of window 1 of application process "AppSSOAgent") is greater than 0 then
+				return "ACTIVE"
+			else -- No open sheets.
+				if (count of every button of window 1 of application process "AppSSOAgent") is greater than 1 then
+					return "OPEN"
+				else -- Only one button.
+					return "CLOSE"
+				end if
+			end if
+		else -- No open windows.
+			return "FALSE"
+		end if
+	end tell
+else
+	return "FALSE"
+end if
+EOAS
+	)
+	echo "${psso_registration_status_result}"
+}
+
+# Check to see if the SmartCard authentication window is open and return its status as "TRUE" or "FALSE".
+check_psso_smartcard_auth_status() {
+	local psso_smartcard_auth_active_result
+	psso_smartcard_auth_active_result=$(osascript 2> /dev/null <<EOAS
 tell application "System Events"
-	if exists process "Single Sign-On" then
-		if (exists window 1 of application process "AppSSOAgent" of application "System Events") then
+	if exists process "coreautha" then
+		if exists window 1 of application process "coreautha" then
 			return "TRUE"
 		else
 			return "FALSE"
@@ -755,32 +988,30 @@ tell application "System Events"
 end tell
 EOAS
 	)
-	echo "${psso_registration_active_result}"
+	echo "${psso_smartcard_auth_active_result}"
 }
 
-# Open the Platform SSO registration window and return "TRUE" or "FALSE".
+# Attempt to open Platform SSO registration via Notification Center.
 open_psso_registration() {
 	killall "AppSSOAgent" > /dev/null 2>&1
 	run_as_user app-sso -l > /dev/null 2>&1
 	sleep 1
-	local open_psso_registration_result
-	open_psso_registration_result=$(osascript <<EOAS
+osascript > /dev/null 2>&1 <<EOAS
 tell application "System Events"
-	-- Loop through the UI elements of the ControlCenter to find the "Clock" menu item to set menuNotificationCenter.
+	-- Loop through the menu bar UI elements of the ControlCenter to find the "com.apple.menuextra.clock" menu item to set "menuNotificationCenter".
 	tell menu bar 1 of application process "ControlCenter"
-		set menuDescriptionList to description of UI elements
-		repeat with menuItem from 1 to length of menuDescriptionList
-			if item menuItem of menuDescriptionList contains "Clock" then
-				set menuNotificationCenter to menuItem
+		set menuBarItems to every menu bar item
+		repeat with i from 1 to count of menuBarItems
+			set aMenuBarItem to item i of menuBarItems
+			if (get value of attribute "AXIdentifier" of aMenuBarItem) is equal to "com.apple.menuextra.clock" then
+				set menuNotificationCenter to aMenuBarItem
 				exit repeat
 			end if
 		end repeat
 	end tell
-	-- Open NotificationCenter via menuNotificationCenter.
-	tell menu bar 1 of application process "ControlCenter"
-		tell menu bar item menuNotificationCenter
-			click
-		end tell
+	-- Open NotificationCenter via "menuNotificationCenter".
+	tell menuNotificationCenter
+		perform action "AXPress"
 	end tell
 	delay 1
 	-- Loop through the UI elements of NotificationCenter to find the Platform SSO notification to set foundElement and pssoElement.
@@ -791,7 +1022,7 @@ tell application "System Events"
 	repeat with aElement in allElements
 		set aElementStaticTexts to static texts of aElement
 		repeat with aStaticText in aElementStaticTexts
-			if (name of aStaticText contains "Registration Required") then
+			if (name of aStaticText contains "${psso_display_name}") then
 				set foundElement to true
 				set pssoElement to aElement
 				exit repeat
@@ -803,33 +1034,26 @@ tell application "System Events"
 	if foundElement then
 		-- Click on the Platform SSO notification via pssoElement.
 		tell pssoElement
-			click
+			perform action "AXPress"
 		end tell
 		delay 1
-		-- Close NotificationCenter via menuNotificationCenter.
-		tell menu bar 1 of application process "ControlCenter"
-			tell menu bar item menuNotificationCenter
-				click
-			end tell
+		-- Close NotificationCenter via "menuNotificationCenter".
+		tell menuNotificationCenter
+			perform action "AXPress"
 		end tell
 	else
-		-- Close NotificationCenter via menuNotificationCenter.
-		tell menu bar 1 of application process "ControlCenter"
-			tell menu bar item menuNotificationCenter
-				click
-			end tell
+		-- Close NotificationCenter via "menuNotificationCenter".
+		tell menuNotificationCenter
+			perform action "AXPress"
 		end tell
-		return "FALSE"
 	end if
 end tell
 EOAS
-	)
-	echo "${open_psso_registration_result}"
 }
 
-# Hide all other visible applications so only the Platform SSO registration window is visible.
+# Hide all other visible applications so only Platform SSO registration is visible.
 focus_psso_registration() {
-	osascript <<EOAS
+	osascript > /dev/null 2>&1 <<EOAS
 tell application "Finder"
 	if (count of windows) is not 0 then
 		tell application "Finder" to close every window
@@ -837,90 +1061,412 @@ tell application "Finder"
 	end if
 end tell
 tell application "System Events"
-	set visibleApps to every process whose visible is true and name is not "AppSSOAgent" and name is not "Single Sign-On" and name is not "Dialog" and name is not "Finder"
+	set visibleApps to every process whose visible is true and name is not "AppSSOAgent" and name is not "Single Sign-On" and name is not "coreautha" and name is not "Dialog" and name is not "Finder"
 	repeat with anApp in visibleApps
 		tell anApp
 			set visible to false
 		end tell
 		delay 0.1
 	end repeat
-	tell process "Single Sign-On"
-		set frontmost to true
-	end tell
+	if (exists window 1 of application process "coreautha") then
+		tell process "coreautha"
+			set frontmost to true
+		end tell
+	else
+		tell process "Single Sign-On"
+			set frontmost to true
+		end tell
+	end if
 end tell
 EOAS
 }
 
-# Open a swiftDialog to inform the user that they need to register with Platform SSO.
-open_dialog_psso_start() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
-	sleep 0.1
+# Close the Platform SSO registration AutoFill window.
+close_psso_registration_autofill() {
+	osascript > /dev/null 2>&1 <<EOAS
+if application "AppSSOAgent" is running then
+	tell application "System Events"
+		set windowCount to count of every window of application process "AppSSOAgent"
+		repeat with i from 1 to windowCount
+			set allElements to entire contents of window i of application process "AppSSOAgent"
+			repeat with aElement in allElements
+				if name of aElement contains "autofill" then
+					set autoFillWindow to window i of application process "AppSSOAgent"
+					exit repeat
+				end if
+			end repeat
+			if autoFillWindow is not missing value then exit repeat
+		end repeat
+		if autoFillWindow is not missing value then
+			set buttonCount to count of every button of autoFillWindow
+			repeat with i from 1 to buttonCount
+				if (get value of attribute "AXIdentifier" of button i of autoFillWindow) is equal to "action-button-2" then
+					tell button i of autoFillWindow
+						perform action "AXPress"
+					end tell
+					exit repeat
+				end if
+			end repeat
+		end if
+	end tell
+end if
+EOAS
+}
+
+# Close the Platform SSO registration window.
+close_psso_registration() {
+	osascript > /dev/null 2>&1 <<EOAS
+if application "AppSSOAgent" is running then
+	tell application "System Events"
+		if (count of every window of application process "AppSSOAgent") is equal to 1 then
+			if (get value of attribute "AXIdentifier" of button 1 of window 1 of application process "AppSSOAgent") is equal to "Primary Button" then
+				tell button 1 of window 1 of application process "AppSSOAgent"
+					perform action "AXPress"
+				end tell
+			end if
+		end if
+	end tell
+end if
+EOAS
+}
+
+# Open an interactive swiftDialog informing the user that they are required to enable Platform SSO and set ${dialog_psso_required_result}.
+open_dialog_psso_required() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	focus_dialog_loop &
+	local focus_dialog_loop_pid
+	focus_dialog_loop_pid=$!
+	disown $focus_dialog_loop_pid
+	log_pseudo "Dialog Open: Platform SSO Registration Required"
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Platform SSO Registration Required" \
-	--message "**Platform SSO is required for all Mac computers at ${DISPLAY_ORGANIZATION_NAME}.**<br><br>Please click the \"Continue\" button to sign in and register with Platform SSO." \
+	--message "**Platform SSO is required for all Mac computers at ${DISPLAY_ORGANIZATION_NAME}.**<br><br>Platform SSO provides enhanced security and convenience by integrating this Mac with your ${DISPLAY_ORGANIZATION_NAME} ${psso_dialog_idp_string} account." \
 	--icon "${psso_dialog_icon}" \
 	--small \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--timer "${TIMEOUT_DEFAULT_SECONDS}" \
+	--hidetimerbar \
+	--button1text "Register Platform SSO" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop
+	dialog_psso_required_result=$?
+	log_pseudo "Dialog Closed: Platform SSO Registration Required"
+	kill -9 "${focus_dialog_loop_pid}" >/dev/null 2>&1
+}
+
+# Open a swiftDialog to inform the user that they need to attach a SmartCard.
+open_dialog_smartcard_required() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Platform SSO SmartCard Required"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "SmartCard Required" \
+	--message "**Please attach your SmartCard to continue registration for Platform SSO.**" \
+	--icon "SF=key.card,palette=accent,primary,none" \
+	--mini \
 	--position "${DISPLAY_DIALOG_POSITION}" \
 	--button1text none \
 	--quitkey p \
 	--hidedefaultkeyboardaction \
 	--ontop &
-	sleep 0.1
+	disown $!
+}
+
+# Open a swiftDialog to inform the user that they need to register with Platform SSO.
+open_dialog_psso_start() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Platform SSO Start"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Platform SSO Registration Required" \
+	--message "**Please click the \"Continue\" button to sign in and register with Platform SSO.**" \
+	--icon "${psso_dialog_icon}" \
+	--mini \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text none \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop &
+	disown $!
+}
+
+# Open a swiftDialog to acknowledge that the user is actively registering with Platform SSO.
+open_dialog_psso_active() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Platform SSO Active"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Platform SSO Registration" \
+	--message "**Please provide your account credentials to proceed with the Platform SSO registration.**" \
+	--icon "${psso_dialog_icon}" \
+	--mini \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text none \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop &
+	disown $!
+}
+
+# Open a swiftDialog to inform the user that they are almost done with the Password authentication workflow.
+open_dialog_password_sync() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Platform SSO Password Sync"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Platform SSO Registration" \
+	--message "**Please enter your ${psso_display_name} password one more time to enable it for macOS account login.**" \
+	--icon "SF=person.badge.key,palette=primary,accent,none" \
+	--mini \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text none \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop &
+	disown $!
+}
+
+# Open a swiftDialog to inform the user that they are almost done with the SmartCard authentication workflow.
+open_dialog_smartcard_pairing() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Platform SSO SmartCard Pairing"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Platform SSO Registration" \
+	--message "**Please enter your SmartCard PIN one more time to enable it for macOS account login.**" \
+	--icon "SF=key.card,palette=accent,primary,none" \
+	--mini \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text none \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop &
 	disown $!
 }
 
 # Open a swiftDialog to inform the user that Platform SSO registration was successful.
 open_dialog_psso_success() {
-	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}"
-	sleep 0.1
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	if [[ $(echo "${psso_login_type}" | grep -c 'Password') -gt 0 ]]; then
+		log_pseudo "Dialog Open: Platform SSO Password Success"
+		"${SWIFT_DIALOG_BINARY}" \
+		--title "Platform SSO Enabled" \
+		--message "**Thank you for enabling Platform SSO!**<br><br>You can now log in to this Mac using your ${psso_display_name} password. Also, applications and services that use your ${psso_display_name} account should now sign in automatically." \
+		--icon "${psso_dialog_icon}" \
+		--small \
+		--position "${DISPLAY_DIALOG_POSITION}" \
+		--button1text "OK" \
+		--quitkey p \
+		--hidedefaultkeyboardaction \
+		--ontop &
+	elif [[ $(echo "${psso_login_type}" | grep -c 'SmartCard') -gt 0 ]]; then
+		log_pseudo "Dialog Open: Platform SSO SmartCard Success"
+		"${SWIFT_DIALOG_BINARY}" \
+		--title "Platform SSO Enabled" \
+		--message "**Thank you for enabling Platform SSO!**<br><br>You can now log in to this Mac using your SmartCard and PIN. Also, applications and services that use your ${psso_display_name} account should now sign in automatically." \
+		--icon "${psso_dialog_icon}" \
+		--small \
+		--position "${DISPLAY_DIALOG_POSITION}" \
+		--button1text "OK" \
+		--quitkey p \
+		--hidedefaultkeyboardaction \
+		--ontop &
+	else
+		log_pseudo "Dialog Open: Platform SSO Secure Enclave Success"
+		"${SWIFT_DIALOG_BINARY}" \
+		--title "Platform SSO Enabled" \
+		--message "**Thank you for enabling Platform SSO!**<br><br>Applications and services that use your ${psso_display_name} account should now sign in automatically." \
+		--icon "${psso_dialog_icon}" \
+		--small \
+		--position "${DISPLAY_DIALOG_POSITION}" \
+		--button1text "OK" \
+		--quitkey p \
+		--hidedefaultkeyboardaction \
+		--ontop &
+	fi
+	disown $!
+}
+
+# Open an interactive swiftDialog informing the user that the Platform SSO workflow as failed.
+open_dialog_psso_failed() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	focus_dialog
+	log_pseudo "Dialog Open: Platform SSO Failed"
 	"${SWIFT_DIALOG_BINARY}" \
-	--title "Platform SSO Registration Complete" \
-	--message "Thank you for registering Platform SSO! Click \"OK\" to close this dialog." \
-	--icon "${psso_dialog_icon}" \
-	--mini \
+	--title "Platform SSO Registration Failed" \
+	--message "**Platform SSO registration has failed.**<br><br>Please contact your administrator if this issue persists." \
+	--icon caution \
+	--overlayicon "${psso_dialog_icon}" \
+	--small \
 	--position "${DISPLAY_DIALOG_POSITION}" \
 	--button1text "OK" \
 	--quitkey p \
 	--hidedefaultkeyboardaction \
 	--ontop &
-	sleep 0.1
 	disown $!
 }
 
 # The full workflow to check Platform SSO status and if required open interfaces and dialogs to register with Platform SSO.
 workflow_psso() {
+	local workflow_psso_error
+	workflow_psso_error="FALSE"
+	psso_workflow_smartcard_active="FALSE"
+	psso_workflow_main_active="FALSE"
+	psso_workflow_user_active="FALSE"
+	
+	# If Platform SSO is already enabled then skip the workflow except for enabling AutoFill extensions.
 	check_psso_user_status
-	local workflow_psso_timer
-	workflow_psso_timer=0
-	psso_workflow_active="FALSE"
-	while [[ "${psso_user_status_dscl}" == "FALSE" ]] || [[ "${psso_user_status_login_name}" == "FALSE" ]]; do
-		[[ $workflow_psso_timer -eq $TIMEOUT_DEFAULT_SECONDS ]] && log_pseudo "Exit: Platform SSO registration workflow timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && exit_error
-		if [[ "${psso_workflow_active}" == "FALSE" ]]; then
-			log_pseudo "Status: Starting Platform SSO registration workflow with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
-			enable_psso_autofill_extensions
-			if [[ "$(check_psso_registration_active)" == "FALSE" ]]; then
-				log_pseudo "Status: Attempting to open Platform SSO registration..."
-				[[ "$(open_psso_registration)" == "FALSE" ]] && log_pseudo "Exit: Unable to open Platform SSO registration." && exit_error
-			else
-				log_pseudo "Status: Platform SSO registration is already open."
-			fi
-			open_dialog_psso_start
-			psso_workflow_active="TRUE"
-		fi
-		if [[ "$(check_psso_registration_active)" == "FALSE" ]]; then
-			log_pseudo "Status: Attempting to re-open Platform SSO registration (the user likely closed the registration window)..."
-			[[ "$(open_psso_registration)" == "FALSE" ]] && log_pseudo "Exit: Unable to open Platform SSO registration." && exit_error
-		fi
-		focus_psso_registration
-		sleep 1
-		check_psso_user_status
-		((workflow_psso_timer++))
-	done
-	if [[ "${psso_workflow_active}" == "TRUE" ]]; then
-		open_dialog_psso_success
-		log_pseudo "Status: Platform SSO is now registered for local user ${current_user_account_name} (${current_user_id}) to account ${psso_user_status_login_name}. The workflow took ${workflow_psso_timer} seconds to complete."
-	else
+	if [[ "${psso_user_status_dscl}" != "FALSE" ]] && [[ "${psso_user_status_login_name}" != "FALSE" ]] && [[ $(echo "${psso_user_status_state}" | grep -c 'Normal') -gt 0 ]] ; then
 		log_pseudo "Status: Platform SSO is already registered for local user ${current_user_account_name} (${current_user_id}) to account ${psso_user_status_login_name}."
+		[[ "${ENABLE_AUTOFILL_EXTENSIONS}" == "TRUE" ]] && enable_psso_autofill_extensions
+		[[ "${UPDATE_JAMF_PRO}" == "TRUE" ]] && jamf_pro_update_inventory # This function has no user dialogs.
+		return 0
+	fi
+	
+	# Handle the initial Platform SSO Registration dialog.
+	local psso_registration_status
+	psso_registration_status=$(check_psso_registration_status)
+	if [[ "${psso_registration_status}" == "FALSE" ]] || [[ "${psso_registration_status}" == "CLOSE" ]]; then
+		log_pseudo "Status: Informing user that Platform SSO is required and will be configured for local user ${current_user_account_name} (${current_user_id})."
+		open_dialog_psso_required
+		if [[ "${dialog_psso_required_result}" -eq 4 ]]; then
+			log_pseudo "Error: The initial Platform SSO workflow dialog timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_psso_error="TRUE"
+		elif [[ "${dialog_psso_required_result}" -gt 0 ]]; then
+			log_pseudo "Error: The initial Platform SSO workflow dialog returned unexpected result: ${dialog_psso_required_result}" && workflow_psso_error="TRUE"
+		fi
+	fi
+	
+	# If the authentication workflow requires a SmartCard then make sure the user has their SmartCard attached.
+	if [[ "${workflow_psso_error}" == "FALSE" ]] && [[ $(echo "${psso_login_type}" | grep -c 'SmartCard') -gt 0 ]]; then
+		if [[ $(security list-smartcards 2>&1 | grep -c "No smartcards found.") -gt 0 ]]; then
+			log_pseudo "Status: Starting Platform SSO registration workflow by waiting for a SmartCard with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
+			psso_workflow_smartcard_active="TRUE"
+			open_dialog_smartcard_required
+			focus_psso_registration
+			local psso_smartcard_start_epoch
+			psso_smartcard_start_epoch=$(date +%s)
+			while [[ $(security list-smartcards 2>&1 | grep -c "No smartcards found.") -gt 0 ]]; do
+				if [[ $(( psso_smartcard_start_epoch + TIMEOUT_DEFAULT_SECONDS )) -lt $(date +%s) ]]; then
+					log_pseudo "Error: Waiting for a SmartCard timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_psso_error="TRUE"
+					break
+				fi
+				focus_psso_registration
+				sleep 1
+			done
+		fi
+		smartcard_array=($(security list-smartcards 2> /dev/null))
+		if [[ -n "${smartcard_array[*]}" ]]; then
+			[[ "${psso_workflow_smartcard_active}" == "FALSE" ]] && log_pseudo "Status: A SmartCard is already attached."
+			[[ "${psso_workflow_smartcard_active}" == "TRUE" ]] && log_pseudo "Status: A SmartCard is now attached. Waiting for a SmartCard took $(( $(date +%s) - psso_smartcard_start_epoch )) seconds to complete."
+		else
+			log_pseudo "Error: Unable to acquire SmartCard listing." && workflow_psso_error="TRUE"
+		fi
+	fi
+	
+	# At this point it's time to open Platform SSO registration.
+	if [[ "${workflow_psso_error}" == "FALSE" ]]; then
+		[[ "${psso_workflow_smartcard_active}" == "FALSE" ]] && log_pseudo "Status: Starting Platform SSO registration workflow with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
+		[[ "${psso_workflow_smartcard_active}" == "TRUE" ]] && log_pseudo "Status: Continuing Platform SSO registration workflow with a ${TIMEOUT_DEFAULT_SECONDS} second timeout..."
+		psso_workflow_main_active="TRUE"
+		local psso_workflow_start_epoch
+		psso_workflow_start_epoch=$(date +%s)
+		[[ "${ENABLE_AUTOFILL_EXTENSIONS}" == "TRUE" ]] && enable_psso_autofill_extensions
+		local psso_registration_status
+		psso_registration_status=$(check_psso_registration_status)
+		if [[ "${psso_registration_status}" != "FALSE" ]] && [[ "${psso_registration_status}" != "CLOSE" ]]; then
+			log_pseudo "Status: Platform SSO registration is already open."
+			open_dialog_psso_start
+		else
+			log_pseudo "Status: Attempting to open Platform SSO registration..."
+			open_psso_registration
+			psso_registration_status=$(check_psso_registration_status)
+			if [[ "${psso_registration_status}" != "FALSE" ]]; then
+				log_pseudo "Status: Platform SSO registration is now open."
+				open_dialog_psso_start
+			else
+				log_pseudo "Error: Unable to open Platform SSO registration." && workflow_psso_error="FALSE"
+			fi
+		fi
+		while [[ "${workflow_psso_error}" == "FALSE" ]] && { [[ "${psso_user_status_dscl}" == "FALSE" ]] || [[ "${psso_user_status_login_name}" == "FALSE" ]]; }; do
+			if [[ $(( psso_workflow_start_epoch + TIMEOUT_DEFAULT_SECONDS )) -lt $(date +%s) ]]; then
+				log_pseudo "Error: Platform SSO registration workflow timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_psso_error="TRUE"
+				break
+			fi
+			focus_psso_registration
+			sleep 1
+			psso_registration_status=$(check_psso_registration_status)
+			if [[ "${psso_registration_status}" == "ACTIVE" ]] && [[ "${psso_workflow_user_active}" == "FALSE" ]]; then
+				log_pseudo "Status: Platform SSO registration is open and the user is actively registering."
+				open_dialog_psso_active
+				psso_workflow_user_active="TRUE"
+			elif [[ "${psso_registration_status}" == "AUTOFILL" ]]; then
+				break
+			elif [[ "${psso_registration_status}" == "FALSE" ]]; then
+				log_pseudo "Status: Attempting to re-open Platform SSO registration (the user likely closed the registration window)..."
+				open_psso_registration
+			elif [[ "${psso_registration_status}" == "CLOSE" ]]; then
+				check_psso_user_status
+				{ [[ "${psso_user_status_dscl}" == "FALSE" ]] || [[ "${psso_user_status_login_name}" == "FALSE" ]]; } && log_pseudo "Error: Detected Platform SSO registration interface failure." && workflow_psso_error="TRUE"
+				break
+			fi
+			check_psso_user_status
+		done
+	fi
+	
+	# At this point the user is technically registered for SSO but may need to complete other tasks.
+	if [[ "${workflow_psso_error}" == "FALSE" ]] && [[ "${psso_workflow_user_active}" == "TRUE" ]]; then
+		local psso_workflow_end_epoch
+		psso_registration_status=$(check_psso_registration_status)
+		if [[ "${ENABLE_AUTOFILL_EXTENSIONS}" == "TRUE" ]] && [[ "${psso_registration_status}" == "AUTOFILL" ]]; then
+			log_pseudo "Status: Closing Platform SSO registration AutoFill window..."
+			close_psso_registration_autofill
+			psso_registration_status=$(check_psso_registration_status)
+		fi
+		if [[ $(echo "${psso_login_type}" | grep -c 'Password') -gt 0 ]] && [[ "${psso_registration_status}" == "ACTIVE" ]]; then
+			log_pseudo "Status: Waiting for IdP password sync to local user account..."
+			open_dialog_password_sync
+			psso_workflow_end_epoch=$(date +%s)
+			while [[ "${psso_registration_status}" != "CLOSE" ]]; do
+				if [[ $(( psso_workflow_end_epoch + TIMEOUT_DEFAULT_SECONDS )) -lt $(date +%s) ]]; then
+					log_pseudo "Error: IdP password sync timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_psso_error="TRUE"
+					break
+				fi
+				focus_psso_registration
+				sleep 1
+				psso_registration_status=$(check_psso_registration_status)
+			done
+			[[ "${workflow_psso_error}" == "FALSE" ]] && log_pseudo "Status: IdP password sync took $(( $(date +%s) - psso_workflow_end_epoch )) seconds to complete."
+		fi
+		if [[ $(echo "${psso_login_type}" | grep -c 'SmartCard') -gt 0 ]] && [[ "$(check_psso_smartcard_auth_status)" == "TRUE" ]]; then
+			log_pseudo "Status: Waiting for SmartCard paring to local user account..."
+			open_dialog_smartcard_pairing
+			psso_workflow_end_epoch=$(date +%s)
+			while [[ "$(check_psso_smartcard_auth_status)" == "TRUE" ]] || [[ "${psso_registration_status}" != "CLOSE" ]]; do
+				if [[ $(( psso_workflow_end_epoch + TIMEOUT_DEFAULT_SECONDS )) -lt $(date +%s) ]]; then
+					log_pseudo "Error: SmartCard paring timed out after ${TIMEOUT_DEFAULT_SECONDS} seconds." && workflow_psso_error="TRUE"
+					break
+				fi
+				focus_psso_registration
+				sleep 1
+				psso_registration_status=$(check_psso_registration_status)
+			done
+			[[ "${workflow_psso_error}" == "FALSE" ]] && log_pseudo "Status: SmartCard paring took $(( $(date +%s) - psso_workflow_end_epoch )) seconds to complete."
+		fi
+	fi
+	
+	# Handle any PSSO workflow errors and exit.
+	if [[ "${workflow_psso_error}" == "FALSE" ]]; then
+		log_pseudo "Status: Platform SSO is now registered for local user ${current_user_account_name} (${current_user_id}) to account ${psso_user_status_login_name}. The Platform SSO workflow took $(( $(date +%s) - psso_workflow_start_epoch )) seconds to complete."
+		close_psso_registration
+		echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+		if [[ "${UPDATE_JAMF_PRO}" == "TRUE" ]]; then
+			jamf_pro_update_inventory
+		elif [[ "${UPDATE_WORKSPACE_ONE}" == "TRUE" ]]; then
+			workspace_one_update_inventory
+			open_dialog_psso_success & disown
+		else
+			open_dialog_psso_success & disown
+		fi
+	else
+		killall "AppSSOAgent" > /dev/null 2>&1
+		{ [[ "${psso_workflow_smartcard_active}" == "TRUE" ]] || [[ "${psso_workflow_main_active}" == "TRUE" ]]; } && open_dialog_psso_failed & disown
+		log_pseudo "Exit: Platform SSO workflow failed due to errors." && exit_error
 	fi
 }
 
@@ -931,10 +1477,7 @@ main() {
 	workflow_startup # This function only completes if the system and user are ready to complete further workflows.
 	workflow_touch_id # If Touch ID is available and required then this function only completes if the user has enabled Touch ID.
 	workflow_psso # This function only completes if the user has successfully registred with Platform SSO.
-	update_inventory_error="FALSE"
-	[[ "${UPDATE_JAMF_PRO}" == "TRUE" ]] && jamf_pro_update_inventory # This function only updates Jamf Pro inventory if a workflow actually ran.
-	[[ "${UPDATE_WORKSPACE_ONE}" == "TRUE" ]] && workspace_one_update_inventory # This function only updates Workspace ONE if a workflow actually ran.
-	[[ "${update_inventory_error}" == "TRUE" ]] && log_pseudo "Exit: Unable to complete requested inventory update." && exit_error
+	[[ "${update_inventory_error}" == "TRUE" ]] && log_pseudo "Exit: Unable to fully complete the requested inventory update." && exit_error
 }
 
 main "$@"
