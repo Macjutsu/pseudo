@@ -41,7 +41,7 @@
 - New Touch ID and Platform SSO failure dialogs.
 - New `/var/log/pseudo.log` entries for swfitDialog events including opening and closing of specific dialogs.
 - Significant rewrite of all user interface detections in an effort to support the above dialogs and all localization languages.
-- **NOTE:** in order to support localization languages the [Platform SSO `AccountDisplayName` key](https://developer.apple.com/documentation/devicemanagement/extensiblesinglesignon/platformsso-data.dictionary) is now required for the `pseudo` workflow.
+- **NOTE: In order to support localization languages the [Platform SSO `AccountDisplayName` key](https://developer.apple.com/documentation/devicemanagement/extensiblesinglesignon/platformsso-data.dictionary) is now required for the `pseudo` workflow.**
 - New optional `ENABLE_AUTOFILL_EXTENSIONS` parameter allows you to control the option to automatically enable AutoFill extensions. Setting this paramater to any other value besides "TRUE" will disable this option.
 - New AutoFill extensions behavior now checks every time the `pseudo` script runs and will re-enable the extensions even if the Platform SSO workflow doesn't need to run (because the user is already registered for Platform SSO).
 - New AutoFill extensions behavior now automatically closes the (unnecessary) Platform SSO AutoFill dialog.
@@ -58,7 +58,7 @@
 - Resolved an issue that was preventing swiftDialog validation if there is no actively logged in user.
 - Resolved an issue where the Jamf Pro device compliance update workflow unnecessarily prompted the user to register.
 - Updated Jamf Pro PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks).
-- New Terminal PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks).**THIS CONFIGURATION PROFILE SHOULD ONLY BE DEPLOYED FOR TESTING AS IT ALLOWS FOR SIGNIFICANT SECURITY VULNERABILITIES!**
+- New Terminal PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks). **THIS CONFIGURATION PROFILE SHOULD ONLY BE DEPLOYED FOR TESTING AS IT ALLOWS FOR SIGNIFICANT SECURITY VULNERABILITIES!**
 - Countless typo fixes and improvements for dialogs and log output.
 - `pseudo` [1.0.0-beta4 SHA-256: e9e531bde61d92fe75e924d11588345832ec9ba8d49b9db147dff4caa1104cc0](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta4/pseudo.checksum.txt)
 
