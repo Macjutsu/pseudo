@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1">
+  <dict>
+    <key>PayloadUUID</key>
+    <string>A4FA1D02-F72C-4C54-A7A1-A326DE93E02D</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadOrganization</key>
+    <string>Macjutsu</string>
+    <key>PayloadIdentifier</key>
+    <string>A4FA1D02-F72C-4C54-A7A1-A326DE93E02D</string>
+    <key>PayloadDisplayName</key>
+    <string>Terminal | PPPC | Allow All Files And User Interface Automation</string>
+    <key>PayloadDescription</key>
+    <string>This allows any process or script started in Terminal to view and control user application interfaces.&#13;
+*** THIS CONFIGURATION PROFILE SHOULD ONLY BE DEPLOYED FOR TESTING AS IT ALLOWS FOR SIGNIFICANT SECURITY VULNERABILITIES! ***</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadEnabled</key>
+    <true/>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadContent</key>
+    <array>
+      <dict>
+        <key>PayloadUUID</key>
+        <string>9CDF95E2-AEB5-4223-A5A4-713A28DFB589</string>
+        <key>PayloadType</key>
+        <string>com.apple.TCC.configuration-profile-policy</string>
+        <key>PayloadOrganization</key>
+        <string>Macjutsu</string>
+        <key>PayloadIdentifier</key>
+        <string>9CDF95E2-AEB5-4223-A5A4-713A28DFB589</string>
+        <key>PayloadDisplayName</key>
+        <string>Jamf Terminal v2</string>
+        <key>PayloadDescription</key>
+        <string/>
+        <key>PayloadVersion</key>
+        <integer>1</integer>
+        <key>PayloadEnabled</key>
+        <true/>
+        <key>Services</key>
+        <dict>
+          <key>Accessibility</key>
+          <array>
+            <dict>
+              <key>Identifier</key>
+              <string>com.apple.Terminal</string>
+              <key>CodeRequirement</key>
+              <string>identifier "com.apple.Terminal" and anchor apple</string>
+              <key>IdentifierType</key>
+              <string>bundleID</string>
+              <key>StaticCode</key>
+              <false/>
+              <key>Allowed</key>
+              <true/>
+            </dict>
+          </array>
+          <key>AppleEvents</key>
+          <array>
+            <dict>
+              <key>Identifier</key>
+              <string>com.apple.Terminal</string>
+              <key>AEReceiverIdentifierType</key>
+              <string>bundleID</string>
+              <key>CodeRequirement</key>
+              <string>identifier "com.apple.Terminal" and anchor apple</string>
+              <key>IdentifierType</key>
+              <string>bundleID</string>
+              <key>StaticCode</key>
+              <false/>
+              <key>AEReceiverIdentifier</key>
+              <string>com.apple.finder</string>
+              <key>Allowed</key>
+              <true/>
+              <key>AEReceiverCodeRequirement</key>
+              <string>identifier "com.apple.finder" and anchor apple</string>
+            </dict>
+            <dict>
+              <key>Identifier</key>
+              <string>com.apple.Terminal</string>
+              <key>AEReceiverIdentifierType</key>
+              <string>bundleID</string>
+              <key>CodeRequirement</key>
+              <string>identifier "com.apple.Terminal" and anchor apple</string>
+              <key>IdentifierType</key>
+              <string>bundleID</string>
+              <key>StaticCode</key>
+              <false/>
+              <key>AEReceiverIdentifier</key>
+              <string>com.apple.systemuiserver</string>
+              <key>Allowed</key>
+              <true/>
+              <key>AEReceiverCodeRequirement</key>
+              <string>identifier "com.apple.systemuiserver" and anchor apple</string>
+            </dict>
+            <dict>
+              <key>Identifier</key>
+              <string>com.apple.Terminal</string>
+              <key>AEReceiverIdentifierType</key>
+              <string>bundleID</string>
+              <key>CodeRequirement</key>
+              <string>identifier "com.apple.Terminal" and anchor apple</string>
+              <key>IdentifierType</key>
+              <string>bundleID</string>
+              <key>StaticCode</key>
+              <false/>
+              <key>AEReceiverIdentifier</key>
+              <string>com.apple.systemevents</string>
+              <key>Allowed</key>
+              <true/>
+              <key>AEReceiverCodeRequirement</key>
+              <string>identifier "com.apple.systemevents" and anchor apple</string>
+            </dict>
+          </array>
+          <key>SystemPolicyAllFiles</key>
+          <array>
+            <dict>
+              <key>Identifier</key>
+              <string>com.apple.Terminal</string>
+              <key>CodeRequirement</key>
+              <string>identifier "com.apple.Terminal" and anchor apple</string>
+              <key>IdentifierType</key>
+              <string>bundleID</string>
+              <key>StaticCode</key>
+              <false/>
+              <key>Allowed</key>
+              <true/>
+            </dict>
+          </array>
+        </dict>
+      </dict>
+    </array>
+  </dict>
+</plist>

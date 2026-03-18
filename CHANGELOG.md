@@ -1,8 +1,8 @@
 # CHANGELOG
 
-## [1.0.0-beta3]
+## [1.0.0-beta4]
 
-2026-02-25
+2026-03-18
 
 ## Highlights (1.0.x)
 
@@ -10,8 +10,8 @@
 - Automatically (optionally) opens the Touch ID System Settings and then focuses the macOS user interface (by forcefully hiding all other applications) until Touch ID is enabled.
 - Automatically opens the Platform SSO registration window and then focuses the macOS user interface (by forcefully hiding all other applications) until Platform SSO is registered.
 - Automatically enables relevant AutoFill password extensions.
-- For computers managed by [Jamf Pro](https://www.jamf.com/products/jamf-pro/), automatically start Device Compliance (for Entra ID) registration and update computer inventory.
-- For computers managed by [Workspace ONE](https://www.omnissa.com/products/workspace-one-unified-endpoint-management/), automatically update Workspace ONE sensors and computer inventory.
+- For computers managed by [Jamf Pro](https://www.jamf.com/products/jamf-pro/), automatically (optionally) start Device Compliance registration and update computer inventory.
+- For computers managed by [Workspace ONE](https://www.omnissa.com/products/workspace-one-unified-endpoint-management/), automatically (optionally) update Workspace ONE computer inventory and sensors.
 - Detailed and easy-to-read command line feedback and local logging at `/var/log/pseudo.log`.
 
 ### Compatibility Notes (1.0.x)
@@ -20,16 +20,47 @@
 - `pseudo` requires system (root) privileges.
 - `pseudo` is compatible with Platform SSO workflows via Microsoft (Entra ID) Company Portal and Okta Verify.
 - `pseudo` requires a [PPPC configuration profile](https://support.apple.com/guide/deployment/privacy-preferences-policy-control-payload-dep38df53c2a/web) granting specific permissions for the process that starts the `pseudo` script:
-	- Allow sending AppleEvents to com.apple.finder, com.apple.systemuiserver, and com.apple.systemevents.
 	- Allow use of Accessibility.
+	- Allow sending AppleEvents to com.apple.finder, com.apple.systemuiserver, and com.apple.systemevents.
 - The [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Sidekicks) contains useful related items including:
 	- Example PPPC configuration profiles.
 	- Management inventory attribute scripts.
 
 ### Known Issues (1.x)
 
+- User focus modes disable the Platform SSO notification, as such the `pseudo` script will not be able to open the notification.
 - The `pseudo` workflow has not been thoroughly tested on macOS 15.
 - The `pseudo` workflow has not been thoroughly tested with Okta Platform SSO.
+
+### Specific Changes (1.0.0-beta4)
+
+- New Platform SSO introduction dialog.
+- New Platform SSO active dialog (indicating that the user is interacting with the Platform SSO registration dialog).
+- New Platform SSO local account finalization dialogs. Including unique dialogs for local password sync and SmartCard pairing.
+- New Touch ID and Platform SSO success dialogs. Including unique success dialogs for each Platform SSO authentication method (password, Secure Enclave, and SmartCard).
+- New Touch ID and Platform SSO failure dialogs.
+- New `/var/log/pseudo.log` entries for swfitDialog events including opening and closing of specific dialogs.
+- Significant rewrite of all user interface detections in an effort to support the above dialogs and all localization languages.
+- **NOTE:** in order to support localization languages the [Platform SSO `AccountDisplayName` key](https://developer.apple.com/documentation/devicemanagement/extensiblesinglesignon/platformsso-data.dictionary) is now required for the `pseudo` workflow.
+- New optional `ENABLE_AUTOFILL_EXTENSIONS` parameter allows you to control the option to automatically enable AutoFill extensions. Setting this paramater to any other value besides "TRUE" will disable this option.
+- New AutoFill extensions behavior now checks every time the `pseudo` script runs and will re-enable the extensions even if the Platform SSO workflow doesn't need to run (because the user is already registered for Platform SSO).
+- New AutoFill extensions behavior now automatically closes the (unnecessary) Platform SSO AutoFill dialog.
+- New Jamf Pro Extension Attribute script to collect the list of enabled third-party extensions in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks).
+- New Jamf Pro device compliance update workflow now checks every time the `pseudo` script runs and will re-enable Jamf Pro device compliance even if the Platform SSO workflow doesn't need to run (because the user is already registered for Platform SSO).
+- New Platform SSO configuration detection mechanism now checks for both the managed preference and output from the `app-sso` command.
+- New identification of user Focus modes. A future version of `pseudo` will leverage this to attempt alternative methods to start the Platform SSO registration.
+- Significant rewrite of the mechanism that hides other visible applications to improve reliability and support more workflow stages.
+- Significant rewrite of timeout mechanisms to improve accuracy and support more workflow stages.
+- Significantly improved Platform SSO registration failure detections.
+- Significant reordering of workflow functions to better support new features. (Apologies to those who have branched earlier versions!)
+- Resolved [an issue](https://github.com/Macjutsu/pseudo/issues/10#issuecomment-4077326668) that prevented accurate detection of previously registered Platform SSO user accounts.
+- Resolved an issue where registration workflows start too soon on first login of a new user account. The startup workflow now waits for both Dock and Finder at login.
+- Resolved an issue that was preventing swiftDialog validation if there is no actively logged in user.
+- Resolved an issue where the Jamf Pro device compliance update workflow unnecessarily prompted the user to register.
+- Updated Jamf Pro PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks).
+- New Terminal PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks).**THIS CONFIGURATION PROFILE SHOULD ONLY BE DEPLOYED FOR TESTING AS IT ALLOWS FOR SIGNIFICANT SECURITY VULNERABILITIES!**
+- Countless typo fixes and improvements for dialogs and log output.
+- `pseudo` [1.0.0-beta4 SHA-256: e9e531bde61d92fe75e924d11588345832ec9ba8d49b9db147dff4caa1104cc0](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta4/pseudo.checksum.txt)
 
 ### Specific Changes (1.0.0-beta3)
 
