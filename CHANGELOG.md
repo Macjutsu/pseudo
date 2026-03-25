@@ -45,7 +45,7 @@
 - New optional `ENABLE_AUTOFILL_EXTENSIONS` parameter allows you to control the option to automatically enable AutoFill extensions. Setting this paramater to any other value besides "TRUE" will disable this option.
 - New AutoFill extensions behavior now checks every time the `pseudo` script runs and will re-enable the extensions even if the Platform SSO workflow doesn't need to run (because the user is already registered for Platform SSO).
 - New AutoFill extensions behavior now automatically closes the (unnecessary) Platform SSO AutoFill dialog.
-- New Jamf Pro Extension Attribute script to collect the list of enabled third-party extensions in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks).
+- New Jamf Pro Extension Attribute script to collect the list of enabled third-party extensions in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Sidekicks).
 - New Jamf Pro device compliance update workflow now checks every time the `pseudo` script runs and will re-enable Jamf Pro device compliance even if the Platform SSO workflow doesn't need to run (because the user is already registered for Platform SSO).
 - New Platform SSO configuration detection mechanism now checks for both the managed preference and output from the `app-sso` command.
 - New identification of user Focus modes. A future version of `pseudo` will leverage this to attempt alternative methods to start the Platform SSO registration.
@@ -57,8 +57,8 @@
 - Resolved an issue where registration workflows start too soon on first login of a new user account. The startup workflow now waits for both Dock and Finder at login.
 - Resolved an issue that was preventing swiftDialog validation if there is no actively logged in user.
 - Resolved an issue where the Jamf Pro device compliance update workflow unnecessarily prompted the user to register.
-- Updated Jamf Pro PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks).
-- New Terminal PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta2/Pseudo-Sidekicks). **THIS CONFIGURATION PROFILE SHOULD ONLY BE DEPLOYED FOR TESTING AS IT ALLOWS FOR SIGNIFICANT SECURITY VULNERABILITIES!**
+- Updated Jamf Pro PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Sidekicks).
+- New Terminal PPPC configuration profile in the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Sidekicks). **THIS CONFIGURATION PROFILE SHOULD ONLY BE DEPLOYED FOR TESTING AS IT ALLOWS FOR SIGNIFICANT SECURITY VULNERABILITIES!**
 - Countless typo fixes and improvements for dialogs and log output.
 - `pseudo` [1.0.0-beta4 SHA-256: e9e531bde61d92fe75e924d11588345832ec9ba8d49b9db147dff4caa1104cc0](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta4/pseudo.checksum.txt)
 
