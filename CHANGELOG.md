@@ -1,8 +1,8 @@
 # CHANGELOG
 
-## [1.0.0-beta4]
+## [1.0.0-beta5]
 
-2026-03-18
+2026-04-28
 
 ## Highlights (1.0.x)
 
@@ -31,6 +31,20 @@
 - User focus modes disable the Platform SSO notification, as such the `pseudo` script will not be able to open the notification.
 - The `pseudo` workflow has not been thoroughly tested on macOS 15.
 - The `pseudo` workflow has not been thoroughly tested with Okta Platform SSO.
+
+### Specific Changes (1.0.0-beta5)
+
+- New mechanism to open the Platform SSO registration via System Settings. This new method is faster, more reliable, and allows for repairing the Platform SSO registration. (Thanks to @sebLuns for help developing this new method!)
+- New optional parameter `REPAIR_MODE` always runs the Platform SSO registration workflow even if the account was previously registered. This mode also skips the Touch ID workflow and the dialog that asks the user to start the Platfrom SSO registration. Setting this paramater to any other value besides "TRUE" will disable this option.
+- New `TIMEOUT_DIALOG_SECONDS=60` parameter defines the specific timeout for waiting for the user to respond to swiftDialog.
+- New `TIMEOUT_OPEN_SECONDS=10` parameter defines the specific timeout for opening a system dialog. This should generally only be a few seconds.
+- Updated parameter name (to better align with other names) `TIMEOUT_WORKFLOW_SECONDS=300` defines the timeout for an entire workflow.
+- Updated Touch ID workflow can run independent of Platform SSO workflow. This allows you to enforce or encourage Touch ID without Platform SSO.
+- New error detection of conflicting Touch ID restrictions from a configuration profile.
+- Updated Okta Platform SSO registration workflow allows the user's default browser to re-open in order to facilitate browser-based registration.
+- Updated [swiftDialog 3.0.1](https://github.com/swiftDialog/swiftDialog/releases/tag/v3.0.1) is automatically installed. (Thanks to @bartreardon for his dedication to the project!)
+- Countless typo fixes and improvements for dialogs and log output.
+- `pseudo` [1.0.0-beta5 SHA-256: 45b44c58b594da849463d64ae44fdf2e0149e1d5826ea2084414ae24092cadb0](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta5/pseudo.checksum.txt)
 
 ### Specific Changes (1.0.0-beta4)
 
