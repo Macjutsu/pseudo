@@ -1,8 +1,8 @@
 # CHANGELOG
 
-## [1.0.0-beta5]
+## [1.0.0-beta6]
 
-2026-04-28
+2026-06-12
 
 ## Highlights (1.0.x)
 
@@ -28,9 +28,20 @@
 
 ### Known Issues (1.x)
 
-- User focus modes disable the Platform SSO notification, as such the `pseudo` script will not be able to open the notification.
 - The `pseudo` workflow has not been thoroughly tested on macOS 15.
-- The `pseudo` workflow has not been thoroughly tested with Okta Platform SSO.
+
+### Specific Changes (1.0.0-beta6)
+
+- Fully verified Platform SSO workflows for both Okta Password and Secure Enclave authentication methods. (A special shout out to the Okta account team for providing a trial Okta tenant with Device Access!)
+- New support for running `pseudo` without a PPPC configuration profile. In this case, the workflow does not enforce Touch ID or Platform SSO registration, but it can validate the system configuration and update management inventories. Thus, you can run `psuedo` after the user completes an automatic enrollment with Platform SSO Simplified Setup to verify the configuration and update inventory.
+- New optional `LOG_PPPC_STATUS` parameter provides additional PPPC permissions details to aide in troubleshooting your configuration. Setting this paramater to any other value besides "TRUE" will disable this option.
+- New optional `UPDATE_JAMF_PRO_USERNAME` parameter allows you to control the option to submit the current Platform SSO enabled username to the Jamf Pro computer inventory username. Setting this paramater to any other value besides "TRUE" will disable this option.
+- New optional `UPDATE_JAMF_PRO_COMPLIANCE` parameter allows you to control the option to validate that the Jamf Pro device compliance (conditional access) registration has completed. Setting this paramater to any other value besides "TRUE" will disable this option.
+- Enabling the optional `REPAIR_MODE` parameter no longer diasbles the Touch ID workflows.
+- Updated workflow no longer checks for user focus modes since this is unnecessary given the new System Settings method.
+- Significantly updated Jamf Pro Extension Attribute script to collect Platform SSO registered users the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Sidekicks).
+- Typo fixes and improvements for dialogs and log output.
+- `pseudo` [1.0.0-beta5 SHA-256: d433e139b4657015c81028b73c6ca0988f44d5daa6687183ee5c32a66435d5e5](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta6/pseudo.checksum.txt)
 
 ### Specific Changes (1.0.0-beta5)
 
