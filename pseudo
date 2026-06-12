@@ -8,9 +8,9 @@
 # shellcheck disable=SC1003,SC2012,SC2024,SC2207
 
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
-PSEUDO_VERSION="1.0.0-beta5"
+PSEUDO_VERSION="1.0.0-beta6"
 readonly PSEUDO_VERSION
-PSEUDO_DATE="2026/04/28"
+PSEUDO_DATE="2026/06/12"
 readonly PSEUDO_DATE
 PSEUDO_USER_AGENT="pseudo/${PSEUDO_VERSION} $(curl --version | head -1 | sed -e 's/curl /curl\//')"
 readonly PSEUDO_USER_AGENT
@@ -42,21 +42,36 @@ set_defaults() {
 	REPAIR_MODE=""
 	readonly REPAIR_MODE
 	
-	# Optionally (after succesfull Platform SSO enrollment) update Jamf Pro device compliance and inventory.
+	# Optionally (assuming there is a Platform SSO enabled user) update Jamf Pro device compliance and inventory.
 	# Any other value besides "TRUE" will disable this option.
 	UPDATE_JAMF_PRO=""
 	readonly UPDATE_JAMF_PRO
 	
-	# Optionally (after succesfull Platform SSO enrollment) sync Workspace ONE.
+	# Optionally when updating Jamf Pro inventory (this requires that the UPDATE_JAMF_PRO option is also enabled) submit the current Platform SSO enabled username to the Jamf Pro computer inventory username.
+	# Any other value besides "TRUE" will disable this option.
+	UPDATE_JAMF_PRO_USERNAME=""
+	readonly UPDATE_JAMF_PRO_USERNAME
+	
+	# Optionally when updating Jamf Pro inventory (this requires that the UPDATE_JAMF_PRO option is also enabled) validate that the Jamf Pro device compliance (conditional access) registration has completed.
+	# Any other value besides "TRUE" will disable this option.
+	UPDATE_JAMF_PRO_COMPLIANCE=""
+	readonly UPDATE_JAMF_PRO_COMPLIANCE
+	
+	# Optionally (assuming there is a Platform SSO enabled user) sync Workspace ONE.
 	# Any other value besides "TRUE" will disable this option.
 	UPDATE_WORKSPACE_ONE=""
 	readonly UPDATE_WORKSPACE_ONE
 	
-	# Optionally (after succesfull Platform SSO enrollment) update Workspace ONE sensor(s).
+	# Optionally (assuming there is a Platform SSO enabled user) update Workspace ONE sensor(s).
 	# The format is a comma-separated list of Workspace ONE sensor names to trigger (no spacing around commas and no comma required if only specifying a single item).
 	# A blank "" value will disable this option.
 	UPDATE_WORKSPACE_ONE_SENSORS=""
 	readonly UPDATE_WORKSPACE_ONE_SENSORS
+	
+	# Optionally provide additional PPPC configuration profile debug logging.
+	# Any other value besides "TRUE" will disable this option.
+	LOG_PPPC_STATUS=""
+	readonly LOG_PPPC_STATUS
 	
 	# *** The remaining parameters are NOT OPTIONAL but can be modified to better fit your workflow. ***
 	################################################################################
@@ -110,7 +125,7 @@ set_defaults() {
 	SWIFT_DIALOG_COMMAND_FILE="/var/tmp/dialog.log"
 	readonly SWIFT_DIALOG_COMMAND_FILE
 	
-	# Path to the Jamf Conditional Access binary:
+	# Path to the Jamf Pro device compliance (conditional access) binary:
 	JAMF_PRO_AAD_BINARY="/Library/Application Support/JAMF/Jamf.app/Contents/MacOS/Jamf Conditional Access.app/Contents/MacOS/Jamf Conditional Access"
 	readonly JAMF_PRO_AAD_BINARY
 	
@@ -126,6 +141,11 @@ set_defaults() {
 # Append input to the command line and log located at ${PSEUDO_LOG}.
 log_pseudo() {
 	echo -e "$(date +"%a %b %d %T") $(hostname -s) $(basename "$0")[$$]: $*" | tee -a "${PSEUDO_LOG}"
+}
+
+# Append input without a preface to the command line and log located at ${PSEUDO_LOG}.
+log_pseudo_no_preface() {
+	echo -e "$*" | tee -a "${PSEUDO_LOG}"
 }
 
 # Send input to the command line only.
@@ -177,6 +197,76 @@ check_system() {
 	[[ "${mac_cpu_architecture}" == "i386" ]] && log_pseudo "Status: Mac computer with Intel running ${macos_version_full}."
 }
 
+# Determine if the ancestor process that started pseudo has PPPC permissions. The path name or Bundle ID for any matching ancestor processes with an appropriate PPPC configuration will be set in the ${tcc_mdm_override_id_ancestor_match_array[]}.
+check_pppc() {
+	local previous_ifs
+	previous_ifs="${IFS}"
+	IFS=$'\n'
+	local pid
+	pid=$$;
+	local ancestor_process
+	local ancestor_bundle_id
+	local ancestors_array=()
+	ancestors_array=()
+	while [[ "${pid}" -gt 1 ]]; do
+		ancestor_process=$(ps -p "${pid}" -o comm=)
+		ancestor_bundle_id=$(codesign -dr - "${ancestor_process}" 2>&1 | awk -F '"' '/identifier/{print $2}')
+		if [[ -n "${ancestor_process}" ]] && [[ -n "${ancestor_bundle_id}" ]]; then
+			ancestors_array+=("${ancestor_process}")
+			ancestors_array+=("${ancestor_bundle_id}")
+		fi
+		pid=$(ps -p "${pid}" -o ppid=)
+	done
+	[[ "${LOG_PPPC_STATUS}" == "TRUE" ]] && log_pseudo "PPPC Status: Ancestor processes (two lines per process; Full Path followed by Bundle ID):\n${ancestors_array[*]}"
+	
+	local pseudo_ancestor_pppc_all_files
+	pseudo_ancestor_pppc_all_files="FALSE"
+	local tcc_mdm_overrides_ids_array
+	tcc_mdm_overrides_ids_array=($(plutil -convert raw -n -o -  "/Library/Application Support/com.apple.TCC/MDMOverrides.plist" 2> /dev/null))
+	local tcc_mdm_overrides_services_array
+	tcc_mdm_overrides_services_array=()
+	local tcc_mdm_overrides_apple_events_array
+	tcc_mdm_overrides_apple_events_array=()
+	local tcc_mdm_override_ancestor_id_match
+	local tcc_mdm_override_ancestor_apple_events_match
+	local tcc_mdm_override_ancestor_accessibility_match
+	tcc_mdm_override_id_ancestor_match_array=()
+	if [[ -n "${tcc_mdm_overrides_ids_array[*]}" ]]; then
+		pseudo_ancestor_pppc_all_files="TRUE"
+		for tcc_mdm_override_id in "${tcc_mdm_overrides_ids_array[@]}"; do
+			if [[ $(echo "${ancestors_array[@]}" | grep -c "${tcc_mdm_override_id}") -gt 0 ]]; then
+				tcc_mdm_override_ancestor_id_match="TRUE"
+				[[ "${LOG_PPPC_STATUS}" == "TRUE" ]] && log_pseudo "PPPC Status: TCC MDM overrides for MATCHING ANCESTOR process: ${tcc_mdm_override_id}"
+			else
+				[[ "${LOG_PPPC_STATUS}" == "TRUE" ]] && log_pseudo "PPPC Status: TCC MDM overrides for process: ${tcc_mdm_override_id}"
+			fi
+			[[ $(echo "${tcc_mdm_override_id}" | grep -c "\.") -eq 0 ]] && tcc_mdm_overrides_services_array=($(plutil -extract "${tcc_mdm_override_id}" raw "/Library/Application Support/com.apple.TCC/MDMOverrides.plist" 2> /dev/null))
+			[[ $(echo "${tcc_mdm_override_id}" | grep -c "\.") -gt 0 ]] && tcc_mdm_overrides_services_array=($(plutil -extract "$(echo "${tcc_mdm_override_id}" | sed -e 's/\./\\\\./g' | xargs)" raw "/Library/Application Support/com.apple.TCC/MDMOverrides.plist" 2> /dev/null))
+			for tcc_mdm_override_service in "${tcc_mdm_overrides_services_array[@]}"; do
+				if [[ "${tcc_mdm_override_service}" == "kTCCServiceAppleEvents" ]]; then
+					[[ $(echo "${tcc_mdm_override_id}" | grep -c "\.") -eq 0 ]] && tcc_mdm_overrides_apple_events_array=($(plutil -extract "${tcc_mdm_override_id}.kTCCServiceAppleEvents" raw "/Library/Application Support/com.apple.TCC/MDMOverrides.plist" 2> /dev/null))
+					[[ $(echo "${tcc_mdm_override_id}" | grep -c "\.") -gt 0 ]] && tcc_mdm_overrides_apple_events_array=($(plutil -extract "$(echo "${tcc_mdm_override_id}" | sed -e 's/\./\\\\./g' | xargs).kTCCServiceAppleEvents" raw "/Library/Application Support/com.apple.TCC/MDMOverrides.plist" 2> /dev/null))
+					{ [[ "${tcc_mdm_override_ancestor_id_match}" == "TRUE" ]] && [[ $(echo "${tcc_mdm_overrides_apple_events_array[@]}" | grep -c "com.apple.finder") -gt 0 ]] && [[ $(echo "${tcc_mdm_overrides_apple_events_array[@]}" | grep -c "com.apple.systemevents") -gt 0 ]] && [[ $(echo "${tcc_mdm_overrides_apple_events_array[@]}" | grep -c "com.apple.systemuiserver") -gt 0 ]]; } && tcc_mdm_override_ancestor_apple_events_match="TRUE"
+					for tcc_mdm_override_apple_event in "${tcc_mdm_overrides_apple_events_array[@]}"; do
+						[[ "${LOG_PPPC_STATUS}" == "TRUE" ]] && log_pseudo_no_preface "${tcc_mdm_override_service}:${tcc_mdm_override_apple_event}"
+					done
+				else
+					{ [[ "${tcc_mdm_override_ancestor_id_match}" == "TRUE" ]] && [[ "${tcc_mdm_override_service}" == "kTCCServiceAccessibility" ]]; } && tcc_mdm_override_ancestor_accessibility_match="TRUE"
+					[[ "${LOG_PPPC_STATUS}" == "TRUE" ]] && log_pseudo_no_preface "${tcc_mdm_override_service}"
+				fi
+			done
+			{ [[ "${tcc_mdm_override_ancestor_id_match}" == "TRUE" ]] && [[ "${tcc_mdm_override_ancestor_apple_events_match}" == "TRUE" ]] && [[ "${tcc_mdm_override_ancestor_accessibility_match}" == "TRUE" ]]; } && tcc_mdm_override_id_ancestor_match_array+=("${tcc_mdm_override_id}")
+			unset tcc_mdm_override_ancestor_id_match
+			unset tcc_mdm_override_ancestor_apple_events_match
+			unset tcc_mdm_override_ancestor_accessibility_match
+		done
+		[[ "${LOG_PPPC_STATUS}" == "TRUE" ]] && log_pseudo "PPPC Status: Ancestor process(es) with valid PPPC configuration:\n${tcc_mdm_override_id_ancestor_match_array[*]}"
+	fi
+	[[ "${pseudo_ancestor_pppc_all_files}" != "TRUE" ]] && log_pseudo "Warning: Unable to determine PPPC configuration because the ancestor process that started pseudo doesn't have full disk (SystemPolicyAllFiles) permissions."
+	[[ -z "${tcc_mdm_override_id_ancestor_match_array[*]}" ]] && log_pseudo "Warning: Unable to enforce Touch ID enablement or Platform SSO registration because of unknown or invalid PPPC configuration."
+	IFS="${previous_ifs}"
+}
+
 # Set ${current_user_account_name} to the currently logged in GUI user or "FALSE" if there is none or a system account.
 check_current_user() {
 	current_user_account_name="FALSE"
@@ -206,30 +296,21 @@ check_current_user() {
 	fi
 }
 
-# Evaluate if a process has told the display to not sleep or the user has enabled Focus.
-check_current_user_focus() {
-	local plutil_response
-	plutil_response=$(plutil -extract data.0.storeAssertionRecords.0.assertionDetails.assertionDetailsModeIdentifier raw -o - "${current_user_home_folder}/Library/DoNotDisturb/DB/Assertions.json" 2>&1)
-	if [[ $(echo "${plutil_response}" | grep -c 'permission') -gt 0 ]]; then
-		log_pseudo "Warning: Unable to determine user Focus mode becaucse the process that started pseudo doesn't have Full Disk Access permissions. If the current user has a Focus mode active then the workflow may fail."
-	elif [[ $(echo "${plutil_response}" | grep -c 'com.apple.') -gt 0 ]]; then
-		log_pseudo "Warning: The current user has a Focus mode enabled. This may cause the workflow to fail."
-	fi
-}
-
 # Get the user's default browser and set ${current_user_default_browser}.
 check_current_user_default_browser() {
 	local plutil_response
 	plutil_response=$(/usr/libexec/PlistBuddy -c "Print :LSHandlers" "${current_user_home_folder}/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist" 2>&1)
 	if [[ $(echo "${plutil_response}" | grep -c 'Does Not Exist') -gt 0 ]]; then
-		log_pseudo "Error: Unable to determine user's default browser becaucse the process that started pseudo doesn't have Full Disk Access permissions."
+		log_pseudo "Warning: Unable to determine user's default browser so assuming the default of Safari."
+		current_user_default_browser="com.apple.safari"
 	else
 		current_user_default_browser=$(echo "${plutil_response}" | grep -B1 'https' | head -1 | awk '{print $3}')
-		log_pseudo "Status: The default browser for user ${current_user_account_name} is Bundle ID ${current_user_default_browser}."
-	fi
-	if [[ -z "${current_user_default_browser}" ]]; then
-		log_pseudo "Warning: No default browser set for user ${current_user_account_name} so assuming the default of Safari."
-		current_user_default_browser="com.apple.safari"
+		if [[ -n "${current_user_default_browser}" ]]; then
+			log_pseudo "Status: The default browser for user ${current_user_account_name} is Bundle ID ${current_user_default_browser}."
+		else
+			log_pseudo "Status: No default browser set for user ${current_user_account_name} so assuming the default of Safari."
+			current_user_default_browser="com.apple.safari"
+		fi
 	fi
 }
 
@@ -263,6 +344,7 @@ workflow_startup() {
 	# Initial system checks.
 	check_system
 	[[ $macos_version_major -lt 15 ]] && log_pseudo "Exit: This computer is running macOS ${macos_version_major} and pseudo requires macOS 15 Sequoia or newer." && exit_error
+	check_pppc
 	
 	# Validate swiftDialog, if missing or invalid then install and check again.
 	killall "dialog" > /dev/null 2>&1
@@ -315,7 +397,6 @@ workflow_startup() {
 	fi
 	if [[ "${current_user_account_name}" != "FALSE" ]]; then
 		log_pseudo "Status: Current active local user is ${current_user_account_name} (${current_user_id})."
-		check_current_user_focus
 	fi
 	
 	# Final startup workflow tests.
@@ -455,7 +536,7 @@ open_dialog_jamfaad_active() {
 	log_pseudo "Dialog Open: jamfAAD Active"
 	"${SWIFT_DIALOG_BINARY}" \
 	--title "Platform SSO Registration" \
-	--message "**Please select your account credentials to complete the Jamf Conditional Access registration.**" \
+	--message "**Please select your account credentials to complete the Jamf Pro device compliance registration.**" \
 	--icon "${psso_dialog_icon}" \
 	--mini \
 	--position "${DISPLAY_DIALOG_POSITION}" \
@@ -469,49 +550,61 @@ open_dialog_jamfaad_active() {
 # Update Jamf Pro device compliance and inventory if workflow was successful.
 jamf_pro_update_inventory() {
 	update_inventory_error="FALSE"
-	if [[ -e "${JAMF_PRO_AAD_BINARY}" ]]; then
-		log_pseudo "Status: Updating Jamf Pro device compliance..."
-		local psso_jamfaad_end_epoch
-		local temp_jamfaad_response
-		temp_jamfaad_response="$(mktemp).log"
-		run_as_user "${JAMF_PRO_AAD_BINARY}" gatherAADInfo > "${temp_jamfaad_response}" 2>&1 &
-		sleep 1
-		if [[ "$(check_jamfaad_interface_status)" == "TRUE" ]]; then
-			log_pseudo "Status: Waiting for user interactive Jamf Pro device compliance registration with a ${TIMEOUT_WORKFLOW_SECONDS} second timeout..."
-			open_dialog_jamfaad_active
-			psso_jamfaad_end_epoch=$(date +%s)
-			while [[ "$(check_jamfaad_interface_status)" == "TRUE" ]]; do
-				if [[ $(( psso_jamfaad_end_epoch + TIMEOUT_WORKFLOW_SECONDS )) -lt $(date +%s) ]]; then
-					log_pseudo "Error: User interactive Jamf Pro device compliance registration timed out after ${TIMEOUT_WORKFLOW_SECONDS} seconds." && update_inventory_error="TRUE"
-					break
+	if [[ "${UPDATE_JAMF_PRO_COMPLIANCE}" == "TRUE" ]]; then
+		if [[ -e "${JAMF_PRO_AAD_BINARY}" ]]; then
+			log_pseudo "Status: Updating Jamf Pro device compliance..."
+			local psso_jamfaad_end_epoch
+			local temp_jamfaad_response
+			temp_jamfaad_response="$(mktemp).log"
+			run_as_user "${JAMF_PRO_AAD_BINARY}" gatherAADInfo > "${temp_jamfaad_response}" 2>&1 &
+			sleep 1
+			if [[ "$(check_jamfaad_interface_status)" == "TRUE" ]]; then
+				log_pseudo "Status: Waiting for user interactive Jamf Pro device compliance registration with a ${TIMEOUT_WORKFLOW_SECONDS} second timeout..."
+				open_dialog_jamfaad_active
+				psso_jamfaad_end_epoch=$(date +%s)
+				while [[ "$(check_jamfaad_interface_status)" == "TRUE" ]]; do
+					if [[ $(( psso_jamfaad_end_epoch + TIMEOUT_WORKFLOW_SECONDS )) -lt $(date +%s) ]]; then
+						log_pseudo "Error: User interactive Jamf Pro device compliance registration timed out after ${TIMEOUT_WORKFLOW_SECONDS} seconds." && update_inventory_error="TRUE"
+						break
+					fi
+					focus_jamfaad_registration
+					sleep 1
+				done
+				if [[ "${update_inventory_error}" == "FALSE" ]]; then
+					log_pseudo "Status: User interactive Jamf Pro device compliance registration took $(( $(date +%s) - psso_jamfaad_end_epoch )) seconds to complete."
+				else
+					killall "Jamf Conditional Access" > /dev/null 2>&1
 				fi
-				focus_jamfaad_registration
-				sleep 1
-			done
-			if [[ "${update_inventory_error}" == "FALSE" ]]; then
-				log_pseudo "Status: User interactive Jamf Pro device compliance registration took $(( $(date +%s) - psso_jamfaad_end_epoch )) seconds to complete."
-			else
-				killall "Jamf Conditional Access" > /dev/null 2>&1
 			fi
-		fi
-		if [[ "$(check_jamfaad_interface_status)" == "FALSE" ]] && [[ "${update_inventory_error}" == "FALSE" ]]; then
-			if [[ $(cat "${temp_jamfaad_response}" | grep -c 'AAD ID acquired') -gt 0 ]] && [[ $(cat "${temp_jamfaad_response}" | grep -c "${current_user_account_name}") -gt 0 ]]; then
-				log_pseudo "Status: Jamf Pro device compliance appears to be registered for user ${current_user_account_name}."
+			if [[ "$(check_jamfaad_interface_status)" == "FALSE" ]] && [[ "${update_inventory_error}" == "FALSE" ]]; then
+				if [[ $(cat "${temp_jamfaad_response}" | grep -c 'AAD ID acquired') -gt 0 ]] && [[ $(cat "${temp_jamfaad_response}" | grep -c "${current_user_account_name}") -gt 0 ]]; then
+					log_pseudo "Status: Jamf Pro device compliance appears to be registered for user ${current_user_account_name}."
+				else
+					log_pseudo "Error: Unexpected Jamf Pro device compliance verification result:\n$(cat "${temp_jamfaad_response}")" && update_inventory_error="TRUE"
+				fi
 			else
-				log_pseudo "Error: Unexpected Jamf Pro device compliance verification result:\n$(cat "${temp_jamfaad_response}")" && update_inventory_error="TRUE"
+				log_pseudo "Error: Could not validate Jamf Pro device compliance registration." && update_inventory_error="TRUE"
 			fi
+			rm -Rf "${temp_jamfaad_response}" > /dev/null 2>&1
 		else
-			log_pseudo "Error: Could not validate Jamf Pro device compliance registration." && update_inventory_error="TRUE"
+			log_pseudo "Warning: Could not locate Jamf Pro device compliance (conditional access) binary in the expected location."
 		fi
-		rm -Rf "${temp_jamfaad_response}" > /dev/null 2>&1
-	else
-		log_pseudo "Warning: Could not locate Jamf Conditional Access binary in the expected location."
 	fi
 	[[ "${psso_workflow_main_active}" == "TRUE" ]] && open_dialog_psso_success & disown
 	if [[ -e "${JAMF_PRO_BINARY}" ]]; then
-		log_pseudo "Status: Updating Jamf Pro inventory..."
 		local jamf_recon_response
-		jamf_recon_response=$("${JAMF_PRO_BINARY}" recon -verbose 2>&1)
+		if [[ "${UPDATE_JAMF_PRO_USERNAME}" == "TRUE" ]]; then
+			if [[ "${psso_user_status_dscl}" != "FALSE" ]]; then
+				log_pseudo "Status: Updating Jamf Pro inventory with username ${psso_user_status_dscl}..."
+				jamf_recon_response=$("${JAMF_PRO_BINARY}" recon -endUsername "${psso_user_status_dscl}" -verbose 2>&1)
+			else
+				log_pseudo "Warning: Updating Jamf Pro inventory without a username because the current user is not Platform SSO enabled..."
+				jamf_recon_response=$("${JAMF_PRO_BINARY}" recon -verbose 2>&1)
+			fi
+		else
+			log_pseudo "Status: Updating Jamf Pro inventory..."
+			jamf_recon_response=$("${JAMF_PRO_BINARY}" recon -verbose 2>&1)
+		fi
 		if [[ $(echo "${jamf_recon_response}" | grep -c 'Submitting data') -gt 0 ]]; then
 			log_pseudo "Status: Jamf Pro inventory successfully updated."
 		else
@@ -807,12 +900,12 @@ workflow_touch_id() {
 	fi
 	
 	# Given the ${TOUCH_ID_CONFIG} option, handle the initial Touch ID registration dialog.
-	if [[ "${TOUCH_ID_CONFIG}" == "REQUIRED" ]]; then
+	if [[ "${workflow_touch_id_error}" == "FALSE" ]] && [[ -n "${tcc_mdm_override_id_ancestor_match_array[*]}" ]] && [[ "${TOUCH_ID_CONFIG}" == "REQUIRED" ]]; then
 		[[ "${touch_id_hardware_status}" == "FALSE" ]] && log_pseudo "Warning: Can't enforce Touch ID enablement because this system does not have access to Touch ID hardware." && return 0
 		[[ "${touch_id_hardware_status}" == "DISABLED" ]] && log_pseudo "Warning: Can't enforce Touch ID enablement because a restrictions configuration profile is not allowing Touch ID." && return 0
 		log_pseudo "Status: Informing user that Touch ID is required and will be configured for local user ${current_user_account_name} (${current_user_id})."
 		open_dialog_touch_id_required
-	elif [[ "${TOUCH_ID_CONFIG}" == "OPTIONAL" ]]; then
+	elif [[ "${workflow_touch_id_error}" == "FALSE" ]] && [[ -n "${tcc_mdm_override_id_ancestor_match_array[*]}" ]] && [[ "${TOUCH_ID_CONFIG}" == "OPTIONAL" ]]; then
 		[[ "${touch_id_hardware_status}" == "FALSE" ]] && log_pseudo "Warning: Can't ask user to enable Touch ID because this system does not have access to Touch ID hardware." && return 0
 		[[ "${touch_id_hardware_status}" == "DISABLED" ]] && log_pseudo "Warning: Can't ask user to enable Touch ID because a restrictions configuration profile is not allowing Touch ID." && return 0
 		log_pseudo "Status: Asking local user ${current_user_account_name} (${current_user_id}) if they want to enable optional Touch ID."
@@ -1328,8 +1421,8 @@ workflow_psso() {
 	
 	# Handle the initial Platform SSO Registration dialog.
 	local psso_registration_status
-	psso_registration_status=$(check_psso_registration_status)
-	if [[ "${REPAIR_MODE}" != "TRUE" ]] && { [[ "${psso_registration_status}" == "FALSE" ]] || [[ "${psso_registration_status}" == "CLOSE" ]]; }; then
+	[[ -n "${tcc_mdm_override_id_ancestor_match_array[*]}" ]] && psso_registration_status=$(check_psso_registration_status)
+	if [[ "${workflow_psso_error}" == "FALSE" ]] && [[ -n "${tcc_mdm_override_id_ancestor_match_array[*]}" ]] && [[ "${REPAIR_MODE}" != "TRUE" ]] && { [[ "${psso_registration_status}" == "FALSE" ]] || [[ "${psso_registration_status}" == "CLOSE" ]]; }; then
 		log_pseudo "Status: Informing user that Platform SSO is required and will be configured for local user ${current_user_account_name} (${current_user_id})."
 		open_dialog_psso_required
 		if [[ "${dialog_psso_required_result}" -eq 4 ]]; then
@@ -1337,10 +1430,12 @@ workflow_psso() {
 		elif [[ "${dialog_psso_required_result}" -gt 0 ]]; then
 			log_pseudo "Error: The initial Platform SSO workflow dialog returned unexpected result: ${dialog_psso_required_result}" && workflow_psso_error="TRUE"
 		fi
+	else
+		log_pseudo "Status: Platform SSO workflow is disabled."
 	fi
 	
 	# If the authentication workflow requires a SmartCard then make sure the user has their SmartCard attached.
-	if [[ "${workflow_psso_error}" == "FALSE" ]] && [[ $(echo "${psso_login_type}" | grep -c 'SmartCard') -gt 0 ]]; then
+	if [[ "${workflow_psso_error}" == "FALSE" ]] && [[ -n "${tcc_mdm_override_id_ancestor_match_array[*]}" ]] && [[ $(echo "${psso_login_type}" | grep -c 'SmartCard') -gt 0 ]]; then
 		if [[ $(security list-smartcards 2>&1 | grep -c "No smartcards found.") -gt 0 ]]; then
 			log_pseudo "Status: Starting Platform SSO registration workflow by waiting for a SmartCard with a ${TIMEOUT_WORKFLOW_SECONDS} second timeout..."
 			psso_workflow_smartcard_active="TRUE"
@@ -1367,7 +1462,7 @@ workflow_psso() {
 	fi
 	
 	# At this point it's time to open Platform SSO registration.
-	if [[ "${workflow_psso_error}" == "FALSE" ]]; then
+	if [[ "${workflow_psso_error}" == "FALSE" ]] && [[ -n "${tcc_mdm_override_id_ancestor_match_array[*]}" ]]; then
 		[[ "${psso_workflow_smartcard_active}" == "FALSE" ]] && log_pseudo "Status: Starting Platform SSO registration workflow with a ${TIMEOUT_WORKFLOW_SECONDS} second timeout..."
 		[[ "${psso_workflow_smartcard_active}" == "TRUE" ]] && log_pseudo "Status: Continuing Platform SSO registration workflow with a ${TIMEOUT_WORKFLOW_SECONDS} second timeout..."
 		[[ -n "${current_user_default_browser}" ]] && do_not_hide_bundle_id="${current_user_default_browser}"
@@ -1450,16 +1545,18 @@ workflow_psso() {
 	
 	# Handle any PSSO workflow errors and exit.
 	if [[ "${workflow_psso_error}" == "FALSE" ]]; then
-		log_pseudo "Status: Platform SSO is now registered for local user ${current_user_account_name} (${current_user_id}) to account ${psso_user_status_login_name}. The Platform SSO workflow took $(( $(date +%s) - psso_workflow_start_epoch )) seconds to complete."
-		close_psso_registration
-		echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+		if [[ "${psso_workflow_user_active}" == "TRUE" ]]; then
+			log_pseudo "Status: Platform SSO is now registered for local user ${current_user_account_name} (${current_user_id}) to account ${psso_user_status_login_name}. The Platform SSO workflow took $(( $(date +%s) - psso_workflow_start_epoch )) seconds to complete."
+			close_psso_registration
+			echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+		fi
 		if [[ "${UPDATE_JAMF_PRO}" == "TRUE" ]]; then
 			jamf_pro_update_inventory
 		elif [[ "${UPDATE_WORKSPACE_ONE}" == "TRUE" ]]; then
 			workspace_one_update_inventory
-			open_dialog_psso_success & disown
+			[[ "${psso_workflow_user_active}" == "TRUE" ]] && open_dialog_psso_success & disown
 		else
-			open_dialog_psso_success & disown
+			[[ "${psso_workflow_user_active}" == "TRUE" ]] && open_dialog_psso_success & disown
 		fi
 	else
 		killall "AppSSOAgent" > /dev/null 2>&1
@@ -1473,7 +1570,7 @@ workflow_psso() {
 
 main() {
 	workflow_startup # This function only completes if the system and user are ready to complete further workflows.
-	[[ "${REPAIR_MODE}" != "TRUE" ]] && workflow_touch_id # If Touch ID is available and required then this function only completes if the user has enabled Touch ID.
+	workflow_touch_id # If Touch ID is available and required then this function only completes if the user has enabled Touch ID.
 	workflow_psso # This function only completes if the user has successfully registred with Platform SSO.
 	[[ "${update_inventory_error}" == "TRUE" ]] && log_pseudo "Exit: Unable to fully complete the requested inventory update." && exit_error
 }
