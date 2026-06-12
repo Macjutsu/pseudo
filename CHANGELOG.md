@@ -40,7 +40,7 @@
 - Enabling the optional `REPAIR_MODE` parameter no longer diasbles the Touch ID workflows.
 - Updated workflow no longer checks for user focus modes since this is unnecessary given the new System Settings method.
 - Significantly updated Jamf Pro Extension Attribute script to collect Platform SSO registered users the [Pseudo-Sidekicks folder](https://github.com/Macjutsu/pseudo/blob/main/Pseudo-Sidekicks).
-- Typo fixes and improvements for dialogs and log output.
+- Countless typo fixes and improvements for dialogs and log output.
 - `pseudo` [1.0.0-beta5 SHA-256: d433e139b4657015c81028b73c6ca0988f44d5daa6687183ee5c32a66435d5e5](https://github.com/Macjutsu/pseudo/blob/1.0.0-beta6/pseudo.checksum.txt)
 
 ### Specific Changes (1.0.0-beta5)
