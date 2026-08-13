@@ -308,7 +308,6 @@ check_current_user() {
 		current_user_guid=$(dscl . read "/Users/${current_user_account_name}" GeneratedUID 2> /dev/null | awk '{print $2;}')
 		current_user_real_name=$(dscl . read "/Users/${current_user_account_name}" RealName 2> /dev/null | tail -1 | sed -e 's/^RealName: //g' -e 's/^ //g')
 		current_user_home_folder=$(dscl . read "/Users/${current_user_account_name}" NFSHomeDirectory 2> /dev/null | awk '{print $2;}')
-		# The three following parameters aren't currently used by the pseudo workflow but you never know when they might come in handy in the future.
 		current_user_is_admin="FALSE"
 		current_user_has_secure_token="FALSE"
 		current_user_is_volume_owner="FALSE"
@@ -1023,12 +1022,19 @@ write_password_rotation_state() {
 	state_type="$2"
 	local state_value
 	state_value="$3"
-	[[ ! -e "${PSEUDO_STATE_PLIST}" ]] && plutil -create xml1 "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1
+	if [[ ! -e "${PSEUDO_STATE_PLIST}" ]]; then
+		plutil -create xml1 "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1
+		chmod 644 "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1
+	fi
 	# Ensure the per-user dictionary exists (this is a no-op if it is already present).
 	/usr/libexec/PlistBuddy -c "Add :${current_user_account_name} dict" "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1
 	# Prefer Set (updates an existing key); fall back to Add for a new key.
 	if ! /usr/libexec/PlistBuddy -c "Set :${current_user_account_name}:${state_key} ${state_value}" "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1; then
 		/usr/libexec/PlistBuddy -c "Add :${current_user_account_name}:${state_key} ${state_type} ${state_value}" "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1
+	fi
+	# Validate the value persisted, warn if it did not.
+	if [[ "$(/usr/libexec/PlistBuddy -c "Print :${current_user_account_name}:${state_key}" "${PSEUDO_STATE_PLIST}" 2> /dev/null)" != "${state_value}" ]]; then
+		log_pseudo "Warning: Failed to persist password rotation state ${state_key}=${state_value} for local user ${current_user_account_name} to ${PSEUDO_STATE_PLIST}."
 	fi
 }
 
@@ -1052,18 +1058,13 @@ EOAS
 	echo "${open_password_system_settings_result}"
 }
 
-# Check the status of the password System Settings window and return its status as "OPEN" or "FALSE".
+# Check whether System Settings is still open and return "OPEN" or "FALSE".
+# This only checks that System Settings is running, not the specific pane, so it is independent of the localized pane title.
 check_password_system_settings_status() {
 	local password_system_settings_status_result
 	password_system_settings_status_result=$(osascript 2> /dev/null <<EOAS
 if application "System Settings" is running then
-	tell application "System Events"
-		if title of window 1 of process "System Settings" contains "Touch ID" then
-			return "OPEN"
-		else
-			return "FALSE"
-		end if
-	end tell
+	return "OPEN"
 else
 	return "FALSE"
 end if
@@ -1239,7 +1240,8 @@ workflow_password_rotation() {
 		if [[ "${PASSWORD_ROTATION_GRACE_DAYS}" =~ ^[0-9]+$ ]] && [[ "${PASSWORD_ROTATION_GRACE_DAYS}" -gt 0 ]]; then
 			local password_age_seconds
 			password_age_seconds=$(( $(date +%s) - current_password_last_set_time ))
-			if [[ "${password_age_seconds}" -le $(( PASSWORD_ROTATION_GRACE_DAYS * 86400 )) ]]; then
+			# Skip the grace period if the age is negative (a clock or timestamp anomaly).
+			if [[ "${password_age_seconds}" -ge 0 ]] && [[ "${password_age_seconds}" -le $(( PASSWORD_ROTATION_GRACE_DAYS * 86400 )) ]]; then
 				log_pseudo "Status: Local password for ${current_user_account_name} (${current_user_id}) was set within the last ${PASSWORD_ROTATION_GRACE_DAYS} day(s) so rotation is considered satisfied."
 				write_password_rotation_state "passwordRotationBaselineTime" "integer" "${current_password_last_set_time}"
 				write_password_rotation_state "passwordRotationComplete" "bool" "true"
@@ -1314,7 +1316,12 @@ workflow_password_rotation() {
 		[[ "${password_rotation_workflow_active}" == "TRUE" ]] && open_dialog_password_rotation_success
 	else
 		[[ "${password_rotation_workflow_active}" == "TRUE" ]] && open_dialog_password_rotation_failed & disown
-		log_pseudo "Exit: Password rotation workflow failed due to errors." && exit_error
+		# Only a required rotation blocks the rest of the run; an optional one lets Touch ID and Platform SSO continue.
+		if [[ "${PASSWORD_ROTATION_CONFIG}" == "REQUIRED" ]]; then
+			log_pseudo "Exit: Password rotation workflow failed due to errors." && exit_error
+		else
+			log_pseudo "Warning: Optional password rotation did not complete. Continuing."
+		fi
 	fi
 }
 
