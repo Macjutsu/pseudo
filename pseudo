@@ -20,6 +20,32 @@ readonly PSEUDO_USER_AGENT
 
 # Set default parameters that are used throughout the script.
 set_defaults() {
+	# Path to the optional pseudo managed preference used to override pseudo options via MDM (Jamf Pro, Intune, etc.).
+	PSEUDO_MANAGED_PLIST="/Library/Managed Preferences/com.macjutsu.pseudo.plist"
+	readonly PSEUDO_MANAGED_PLIST
+
+	# Path to the local pseudo state preference where pseudo persists per-user workflow state (currently the password rotation baseline).
+	PSEUDO_STATE_PLIST="/Library/Preferences/com.macjutsu.pseudo.plist"
+	readonly PSEUDO_STATE_PLIST
+
+	# Optionally enable the local password rotation workflow that guides the user to change their local account password (so it no longer matches their IdP password) before Platform SSO registration.
+	# The supported values are "REQUIRED" or "OPTIONAL". Any other value, including blank "", will disable the password rotation workflow.
+	# This value can be overridden by the PASSWORD_ROTATION_CONFIG key in "${PSEUDO_MANAGED_PLIST}" so it can be set from Jamf Pro, Intune, or any MDM that delivers a configuration profile.
+	PASSWORD_ROTATION_CONFIG=""
+	local password_rotation_config_managed
+	password_rotation_config_managed=$(/usr/libexec/PlistBuddy -c "Print :PASSWORD_ROTATION_CONFIG" "${PSEUDO_MANAGED_PLIST}" 2> /dev/null)
+	[[ -n "${password_rotation_config_managed}" ]] && PASSWORD_ROTATION_CONFIG="${password_rotation_config_managed}"
+	readonly PASSWORD_ROTATION_CONFIG
+
+	# The number of days since the local password was last set within which rotation is considered already satisfied (grace period), so recently changed users are not prompted to change again.
+	# A blank "" or "0" value disables the grace period, in which case any password predating pseudo's first run on the device will require rotation.
+	# This value can be overridden by the PASSWORD_ROTATION_GRACE_DAYS key in "${PSEUDO_MANAGED_PLIST}".
+	PASSWORD_ROTATION_GRACE_DAYS=""
+	local password_rotation_grace_days_managed
+	password_rotation_grace_days_managed=$(/usr/libexec/PlistBuddy -c "Print :PASSWORD_ROTATION_GRACE_DAYS" "${PSEUDO_MANAGED_PLIST}" 2> /dev/null)
+	[[ -n "${password_rotation_grace_days_managed}" ]] && PASSWORD_ROTATION_GRACE_DAYS="${password_rotation_grace_days_managed}"
+	readonly PASSWORD_ROTATION_GRACE_DAYS
+
 	# Optionally check for the installation of configuration profiles that would be required for the Platform SSO workflow.
 	# The format is a comma-separated list of configuration profile identifiers (no spacing around commas and no comma required if only specifying a single item).
 	# Configuration profile identifiers include display names, UUIDs, or any other matching text string.
@@ -970,6 +996,328 @@ workflow_touch_id() {
 	fi
 }
 
+# MARK: *** Password Rotation Workflow ***
+################################################################################
+
+# Return the current user's local password last set time as an integer epoch (seconds), or an empty string if it can't be determined.
+get_password_last_set_time() {
+	local password_last_set_time_response
+	password_last_set_time_response=$(dscl . -readpl /Users/"${current_user_account_name}" accountPolicyData passwordLastSetTime 2> /dev/null | awk '{print $NF}')
+	# Strip any fractional seconds to yield an integer epoch.
+	[[ -n "${password_last_set_time_response}" ]] && echo "${password_last_set_time_response%.*}"
+}
+
+# Read the persisted per-user password rotation state from "${PSEUDO_STATE_PLIST}" and set ${password_rotation_baseline_time} and ${password_rotation_complete}.
+read_password_rotation_state() {
+	password_rotation_baseline_time=$(/usr/libexec/PlistBuddy -c "Print :${current_user_account_name}:passwordRotationBaselineTime" "${PSEUDO_STATE_PLIST}" 2> /dev/null)
+	password_rotation_complete=$(/usr/libexec/PlistBuddy -c "Print :${current_user_account_name}:passwordRotationComplete" "${PSEUDO_STATE_PLIST}" 2> /dev/null)
+	[[ -z "${password_rotation_complete}" ]] && password_rotation_complete="false"
+}
+
+# Persist a value into the per-user password rotation state, creating the state plist and per-user dictionary as needed.
+# Usage: write_password_rotation_state <key> <type> <value>
+write_password_rotation_state() {
+	local state_key
+	state_key="$1"
+	local state_type
+	state_type="$2"
+	local state_value
+	state_value="$3"
+	[[ ! -e "${PSEUDO_STATE_PLIST}" ]] && plutil -create xml1 "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1
+	# Ensure the per-user dictionary exists (this is a no-op if it is already present).
+	/usr/libexec/PlistBuddy -c "Add :${current_user_account_name} dict" "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1
+	# Prefer Set (updates an existing key); fall back to Add for a new key.
+	if ! /usr/libexec/PlistBuddy -c "Set :${current_user_account_name}:${state_key} ${state_value}" "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1; then
+		/usr/libexec/PlistBuddy -c "Add :${current_user_account_name}:${state_key} ${state_type} ${state_value}" "${PSEUDO_STATE_PLIST}" > /dev/null 2>&1
+	fi
+}
+
+# Open the password System Settings window and return status as "TRUE" or "FALSE".
+# On Macs with Touch ID the local login password is changed from the "Touch ID & Password" pane; the exact pane identifier should be validated against the target macOS version and hardware.
+open_password_system_settings() {
+	killall "System Settings" > /dev/null 2>&1
+	run_as_user open "x-apple.systempreferences:com.apple.Touch-ID-Settings.extension"
+	local open_password_system_settings_result
+	open_password_system_settings_result=$(osascript 2> /dev/null <<EOAS
+set openTimeout to (current date) + ${TIMEOUT_OPEN_SECONDS}
+tell application "System Events"
+	repeat while not (exists window 1 of application process "System Settings")
+		delay 0.1
+		if (current date) > openTimeout then return "FALSE"
+	end repeat
+	return "TRUE"
+end tell
+EOAS
+	)
+	echo "${open_password_system_settings_result}"
+}
+
+# Check the status of the password System Settings window and return its status as "OPEN" or "FALSE".
+check_password_system_settings_status() {
+	local password_system_settings_status_result
+	password_system_settings_status_result=$(osascript 2> /dev/null <<EOAS
+if application "System Settings" is running then
+	tell application "System Events"
+		if title of window 1 of process "System Settings" contains "Touch ID" then
+			return "OPEN"
+		else
+			return "FALSE"
+		end if
+	end tell
+else
+	return "FALSE"
+end if
+EOAS
+	)
+	echo "${password_system_settings_status_result}"
+}
+
+# Hide all other visible applications so only the password System Settings is visible.
+focus_password_settings() {
+	osascript > /dev/null 2>&1 <<EOAS
+tell application "Finder"
+	if (count of windows) is not 0 then
+		tell application "Finder" to close every window
+		delay 0.1
+	end if
+end tell
+tell application "System Events"
+	set visibleApps to every process whose visible is true and name is not "System Settings" and name is not "Dialog" and name is not "Finder" and bundle identifier is not "${do_not_hide_bundle_id}"
+	repeat with anApp in visibleApps
+		tell anApp to set visible to false
+		delay 0.1
+	end repeat
+	tell process "System Settings" to set frontmost to true
+end tell
+EOAS
+}
+
+# Open an interactive swiftDialog informing the user that they are required to change their local password and set ${dialog_password_rotation_result}.
+open_dialog_password_rotation_required() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	focus_dialog_loop &
+	local focus_dialog_loop_pid
+	focus_dialog_loop_pid=$!
+	disown $focus_dialog_loop_pid
+	log_pseudo "Dialog Open: Password Change Required"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Password Change Required" \
+	--message "**Please change your local Mac password so it no longer matches your ${DISPLAY_ORGANIZATION_NAME} account password.**<br><br>Using a separate local password improves the security of this Mac before you register with Platform SSO." \
+	--icon "SF=lock.rotation,palette=primary,accent,none" \
+	--small \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--timer "${TIMEOUT_DIALOG_SECONDS}" \
+	--hidetimerbar \
+	--button1text "Change Password" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop
+	dialog_password_rotation_result=$?
+	log_pseudo "Dialog Closed: Password Change Required"
+	kill -9 "${focus_dialog_loop_pid}" > /dev/null 2>&1
+}
+
+# Open an interactive swiftDialog asking the user if they want to change their local password and set ${dialog_password_rotation_result}.
+open_dialog_password_rotation_optional() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	focus_dialog_loop &
+	local focus_dialog_loop_pid
+	focus_dialog_loop_pid=$!
+	disown $focus_dialog_loop_pid
+	log_pseudo "Dialog Open: Password Change Optional"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Password Change" \
+	--message "**Please take a few moments to change your local Mac password so it no longer matches your ${DISPLAY_ORGANIZATION_NAME} account password.**<br><br>Using a separate local password improves the security of this Mac before you register with Platform SSO." \
+	--icon "SF=lock.rotation,palette=primary,accent,none" \
+	--small \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--timer "${TIMEOUT_DIALOG_SECONDS}" \
+	--hidetimerbar \
+	--button1text "Change Password" \
+	--button2text "Skip" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop
+	dialog_password_rotation_result=$?
+	log_pseudo "Dialog Closed: Password Change Optional"
+	kill -9 "${focus_dialog_loop_pid}" > /dev/null 2>&1
+}
+
+# Open a swiftDialog to assist while the user changes their local password.
+open_dialog_password_rotation_start() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Password Change Start"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Password Change" \
+	--message "**Change your password using the \"Change Password…\" button, then choose a new password that is different from your ${DISPLAY_ORGANIZATION_NAME} account password.**" \
+	--icon "SF=lock.rotation,palette=primary,accent,none" \
+	--mini \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text none \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop &
+	disown $!
+}
+
+# Open a swiftDialog to inform the user that their local password has been changed.
+open_dialog_password_rotation_success() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	log_pseudo "Dialog Open: Password Change Success"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Password Changed" \
+	--message "**Thank you for changing your local password!**<br><br>You can now continue to register with Platform SSO." \
+	--icon "SF=lock.rotation,palette=primary,accent,none" \
+	--small \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--timer "${TIMEOUT_DIALOG_SECONDS}" \
+	--hidetimerbar \
+	--button1text "OK" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop
+	return $?
+}
+
+# Open an interactive swiftDialog informing the user that the password rotation workflow has failed.
+open_dialog_password_rotation_failed() {
+	echo "quit:" >> "${SWIFT_DIALOG_COMMAND_FILE}" && sleep 0.1
+	focus_dialog
+	log_pseudo "Dialog Open: Password Change Failed"
+	"${SWIFT_DIALOG_BINARY}" \
+	--title "Password Change Failed" \
+	--message "**Local password change has failed.**<br><br>Please contact your administrator if this issue persists." \
+	--icon caution \
+	--overlayicon "SF=lock.rotation,palette=primary,accent,none" \
+	--small \
+	--position "${DISPLAY_DIALOG_POSITION}" \
+	--button1text "OK" \
+	--quitkey p \
+	--hidedefaultkeyboardaction \
+	--ontop &
+	disown $!
+}
+
+# The full workflow to check whether the local password has been rotated and, if required, guide the user to change it before Platform SSO registration.
+workflow_password_rotation() {
+	local workflow_password_rotation_error
+	workflow_password_rotation_error="FALSE"
+	password_rotation_workflow_active="FALSE"
+
+	# If the password rotation workflow is disabled then skip it.
+	if [[ "${PASSWORD_ROTATION_CONFIG}" != "REQUIRED" ]] && [[ "${PASSWORD_ROTATION_CONFIG}" != "OPTIONAL" ]]; then
+		log_pseudo "Status: Password rotation workflow is disabled."
+		return 0
+	fi
+
+	# Changing the local password requires a SecureToken (volume owner) so that the change re-wraps the FileVault key without resetting the Secure Enclave. If the user has no SecureToken then rotation can't be enforced here.
+	if [[ "${current_user_has_secure_token}" != "TRUE" ]]; then
+		log_pseudo "Warning: Can't run the password rotation workflow because local user ${current_user_account_name} (${current_user_id}) does not have a SecureToken."
+		return 0
+	fi
+
+	# Determine the current local password last set time.
+	local current_password_last_set_time
+	current_password_last_set_time=$(get_password_last_set_time)
+	if [[ -z "${current_password_last_set_time}" ]]; then
+		log_pseudo "Warning: Can't run the password rotation workflow because the password last set time for local user ${current_user_account_name} (${current_user_id}) could not be determined."
+		return 0
+	fi
+
+	# Load any persisted per-user rotation state.
+	read_password_rotation_state
+
+	# If rotation was already completed for this user then skip.
+	if [[ "${password_rotation_complete}" == "true" ]]; then
+		log_pseudo "Status: Local password rotation is already complete for local user ${current_user_account_name} (${current_user_id})."
+		return 0
+	fi
+
+	# If there is no baseline yet then this is pseudo's first password rotation evaluation for this user on this device.
+	if [[ -z "${password_rotation_baseline_time}" ]]; then
+		# Optional grace period: if the password was set within the last ${PASSWORD_ROTATION_GRACE_DAYS} days then consider rotation already satisfied.
+		if [[ "${PASSWORD_ROTATION_GRACE_DAYS}" =~ ^[0-9]+$ ]] && [[ "${PASSWORD_ROTATION_GRACE_DAYS}" -gt 0 ]]; then
+			local password_age_seconds
+			password_age_seconds=$(( $(date +%s) - current_password_last_set_time ))
+			if [[ "${password_age_seconds}" -le $(( PASSWORD_ROTATION_GRACE_DAYS * 86400 )) ]]; then
+				log_pseudo "Status: Local password for ${current_user_account_name} (${current_user_id}) was set within the last ${PASSWORD_ROTATION_GRACE_DAYS} day(s) so rotation is considered satisfied."
+				write_password_rotation_state "passwordRotationBaselineTime" "integer" "${current_password_last_set_time}"
+				write_password_rotation_state "passwordRotationComplete" "bool" "true"
+				return 0
+			fi
+		fi
+		log_pseudo "Status: Recording password rotation baseline (${current_password_last_set_time}) for local user ${current_user_account_name} (${current_user_id})."
+		write_password_rotation_state "passwordRotationBaselineTime" "integer" "${current_password_last_set_time}"
+		password_rotation_baseline_time="${current_password_last_set_time}"
+	fi
+
+	# If the password has already changed since the recorded baseline then rotation is complete.
+	if [[ "${current_password_last_set_time}" =~ ^[0-9]+$ ]] && [[ "${password_rotation_baseline_time}" =~ ^[0-9]+$ ]] && [[ "${current_password_last_set_time}" -gt "${password_rotation_baseline_time}" ]]; then
+		log_pseudo "Status: Local password has been rotated for local user ${current_user_account_name} (${current_user_id})."
+		write_password_rotation_state "passwordRotationComplete" "bool" "true"
+		return 0
+	fi
+
+	# At this point the user needs to rotate their password. Only proceed if pseudo has a valid PPPC configuration to drive System Settings.
+	if [[ -z "${tcc_mdm_override_id_ancestor_match_array[*]}" ]]; then
+		log_pseudo "Warning: Can't run the password rotation workflow because pseudo does not have a valid PPPC configuration to control System Settings."
+		return 0
+	fi
+
+	# Handle the initial password rotation dialog based on the ${PASSWORD_ROTATION_CONFIG} option.
+	if [[ "${PASSWORD_ROTATION_CONFIG}" == "REQUIRED" ]]; then
+		log_pseudo "Status: Informing user that local password rotation is required for local user ${current_user_account_name} (${current_user_id})."
+		open_dialog_password_rotation_required
+	else
+		log_pseudo "Status: Asking local user ${current_user_account_name} (${current_user_id}) if they want to rotate their local password."
+		open_dialog_password_rotation_optional
+	fi
+	if [[ "${dialog_password_rotation_result}" -eq 2 ]]; then
+		log_pseudo "Status: The user chose to skip the optional local password rotation." && return 0
+	elif [[ "${dialog_password_rotation_result}" -eq 4 ]]; then
+		log_pseudo "Error: The initial password rotation dialog timed out after ${TIMEOUT_DIALOG_SECONDS} seconds." && workflow_password_rotation_error="TRUE"
+	elif [[ "${dialog_password_rotation_result}" -gt 0 ]]; then
+		log_pseudo "Error: The initial password rotation dialog returned unexpected result: ${dialog_password_rotation_result}" && workflow_password_rotation_error="TRUE"
+	fi
+
+	# Open the password System Settings and wait for the user to change their password, detected by the password last set time advancing past the baseline.
+	if [[ "${workflow_password_rotation_error}" == "FALSE" ]]; then
+		log_pseudo "Status: Starting password rotation workflow with a ${TIMEOUT_WORKFLOW_SECONDS} second timeout..."
+		password_rotation_workflow_active="TRUE"
+		local password_rotation_settings_status
+		local password_rotation_workflow_start_epoch
+		password_rotation_workflow_start_epoch=$(date +%s)
+		log_pseudo "Status: Attempting to open password System Settings..."
+		[[ $(open_password_system_settings) == "FALSE" ]] && log_pseudo "Error: Opening password System Settings timed out after ${TIMEOUT_OPEN_SECONDS} seconds." && workflow_password_rotation_error="TRUE"
+		[[ "${workflow_password_rotation_error}" == "FALSE" ]] && open_dialog_password_rotation_start
+		while [[ "${workflow_password_rotation_error}" == "FALSE" ]] && [[ "${current_password_last_set_time}" -le "${password_rotation_baseline_time}" ]]; do
+			if [[ $(( password_rotation_workflow_start_epoch + TIMEOUT_WORKFLOW_SECONDS )) -lt $(date +%s) ]]; then
+				log_pseudo "Error: Password rotation workflow timed out after ${TIMEOUT_WORKFLOW_SECONDS} seconds." && workflow_password_rotation_error="TRUE"
+				break
+			fi
+			focus_password_settings
+			password_rotation_settings_status=$(check_password_system_settings_status)
+			if [[ "${password_rotation_settings_status}" == "FALSE" ]]; then
+				log_pseudo "Status: Attempting to re-open password System Settings (the user likely closed the settings window)..."
+				[[ $(open_password_system_settings) == "FALSE" ]] && log_pseudo "Error: Opening password System Settings timed out after ${TIMEOUT_OPEN_SECONDS} seconds." && workflow_password_rotation_error="TRUE"
+			fi
+			sleep 1
+			current_password_last_set_time=$(get_password_last_set_time)
+		done
+	fi
+
+	# Finalize: mark complete on success, present the success or failure dialog, and close System Settings.
+	killall "System Settings" > /dev/null 2>&1
+	if [[ "${workflow_password_rotation_error}" == "FALSE" ]]; then
+		write_password_rotation_state "passwordRotationComplete" "bool" "true"
+		log_pseudo "Status: Local password has been rotated for local user ${current_user_account_name} (${current_user_id}). The password rotation workflow took $(( $(date +%s) - password_rotation_workflow_start_epoch )) seconds to complete."
+		[[ "${password_rotation_workflow_active}" == "TRUE" ]] && open_dialog_password_rotation_success
+	else
+		[[ "${password_rotation_workflow_active}" == "TRUE" ]] && open_dialog_password_rotation_failed & disown
+		log_pseudo "Exit: Password rotation workflow failed due to errors." && exit_error
+	fi
+}
+
 # MARK: *** Platform SSO Workflow ***
 ################################################################################
 
@@ -1570,6 +1918,7 @@ workflow_psso() {
 
 main() {
 	workflow_startup # This function only completes if the system and user are ready to complete further workflows.
+	workflow_password_rotation # If enabled, this function guides the user to change their local password (so it differs from their IdP password) before Platform SSO registration.
 	workflow_touch_id # If Touch ID is available and required then this function only completes if the user has enabled Touch ID.
 	workflow_psso # This function only completes if the user has successfully registred with Platform SSO.
 	[[ "${update_inventory_error}" == "TRUE" ]] && log_pseudo "Exit: Unable to fully complete the requested inventory update." && exit_error
