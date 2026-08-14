@@ -135,9 +135,9 @@ set_defaults() {
 	SSO_MANAGED_PLIST="/Library/Managed Preferences/com.apple.extensiblesso.plist"
 	readonly SSO_MANAGED_PLIST
 	
-	# Target version for swiftDialog:
-	SWIFT_DIALOG_TARGET_VERSION="3.0.1"
-	readonly SWIFT_DIALOG_TARGET_VERSION
+	# Minimum version for swiftDialog (swiftDialog is only downloaded if the installed version is below this):
+	SWIFT_DIALOG_MINIMUM_VERSION="3.0.1"
+	readonly SWIFT_DIALOG_MINIMUM_VERSION
 	
 	# URL to the swiftDialog package installer download:
 	SWIFT_DIALOG_DOWNLOAD_URL="https://github.com/swiftDialog/swiftDialog/releases/download/v3.0.1/dialog-3.0.1-4955.pkg"
@@ -441,10 +441,10 @@ check_swift_dialog() {
 	if [[ $(echo "${codesign_response}" | grep -c 'valid on disk') -gt 0 ]]; then
 		local version_response
 		version_response=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${swift_dialog_app}/Contents/Info.plist" 2> /dev/null)
-		if [[ "${SWIFT_DIALOG_TARGET_VERSION}" == "${version_response}" ]]; then
+		if [[ -n "${version_response}" ]] && [[ "$(printf '%s\n' "${SWIFT_DIALOG_MINIMUM_VERSION}" "${version_response}" | sort -V | head -n 1)" == "${SWIFT_DIALOG_MINIMUM_VERSION}" ]]; then
 			swift_dialog_valid="TRUE"
 		else
-			log_pseudo "Warning: swiftDialog at path is currently version ${version_response}, this does not match target version ${SWIFT_DIALOG_TARGET_VERSION}."
+			log_pseudo "Warning: swiftDialog at path is currently version ${version_response}, this is below the minimum version ${SWIFT_DIALOG_MINIMUM_VERSION}."
 		fi
 	else
 		log_pseudo "Warning: unable validate signature for swiftDialog:\n${codesign_response}."
