@@ -9,6 +9,7 @@
 - Rotation is best effort by design. Because `pseudo` never sees the password, it can confirm that the password changed but not that the new password is different from the IdP password.
 - New optional `PASSWORD_ROTATION_GRACE_DAYS` parameter. If the local password was set within this many days, rotation is treated as already satisfied so recently changed users are not prompted. A blank "" or "0" value disables the grace period.
 - New `com.macjutsu.pseudo` managed preference support so `PASSWORD_ROTATION_CONFIG` and `PASSWORD_ROTATION_GRACE_DAYS` can be set from Jamf Pro, Intune, or any MDM that delivers a configuration profile. Per-user workflow state is persisted to `/Library/Preferences/com.macjutsu.pseudo.plist`.
+- swiftDialog is now kept when its installed version is at or above `SWIFT_DIALOG_MINIMUM_VERSION`, instead of requiring an exact version match, so a newer swiftDialog is no longer reinstalled on every run.
 
 ## [1.0.0-beta6]
 
