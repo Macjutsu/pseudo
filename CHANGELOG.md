@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Specific Changes (Unreleased)
+
+- New optional local password rotation workflow that guides the user to change their local account password (so it no longer matches their IdP password) before Platform SSO registration. This is aimed at Secure Enclave deployments where the local password is decoupled from the IdP password. The new `PASSWORD_ROTATION_CONFIG` parameter supports "REQUIRED" or "OPTIONAL"; any other value, including blank "", disables the workflow.
+- The workflow never captures the password. It opens the password System Settings and nudges the user, then confirms the change by watching the local account's password last set time advance past a baseline. The baseline (the password last set time seen on `pseudo`'s first run for that user) is persisted per user, so this behaves as a one-time migration rather than a recurring password policy.
+- Rotation is best effort by design. Because `pseudo` never sees the password, it can confirm that the password changed but not that the new password is different from the IdP password.
+- New optional `PASSWORD_ROTATION_GRACE_DAYS` parameter. If the local password was set within this many days, rotation is treated as already satisfied so recently changed users are not prompted. A blank "" or "0" value disables the grace period.
+- New `com.macjutsu.pseudo` managed preference support so `PASSWORD_ROTATION_CONFIG` and `PASSWORD_ROTATION_GRACE_DAYS` can be set from Jamf Pro, Intune, or any MDM that delivers a configuration profile. Per-user workflow state is persisted to `/Library/Preferences/com.macjutsu.pseudo.plist`.
+- swiftDialog is now kept when its installed version is at or above `SWIFT_DIALOG_MINIMUM_VERSION`, instead of requiring an exact version match, so a newer swiftDialog is no longer reinstalled on every run.
+
 ## [1.0.0-beta6]
 
 2026-06-12
